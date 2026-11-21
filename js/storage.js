@@ -365,7 +365,8 @@ export function readBackup(text) {
   if (Number(obj.format) > BACKUP_FORMAT) {
     throw new Error('新しいバージョンで作られたファイルです。アプリを更新してから読み込んでください。');
   }
-  return { data: sanitizeData(obj.data), exportedAt: isoOr(obj.exportedAt, null) };
+  // format：書き出したファイルの形式（数字がないファイルは 1 とみなす）。1 のファイルには家計が入っていない
+  return { data: sanitizeData(obj.data), exportedAt: isoOr(obj.exportedAt, null), format: Number(obj.format) || 1 };
 }
 
 // ---- ロックの設定（バックアップには含めない） ----
@@ -391,6 +392,22 @@ export function clearLock() {
 
 export const getFlag = (name) => localStorage.getItem(PREFIX + name) === '1';
 export const setFlag = (name) => localStorage.setItem(PREFIX + name, '1');
+
+/** 文字の設定（最後に開いていたタブなど）。読めない・保存できないときは何もしない */
+export function getPref(name) {
+  try {
+    return localStorage.getItem(PREFIX + name);
+  } catch {
+    return null;
+  }
+}
+export function setPref(name, value) {
+  try {
+    localStorage.setItem(PREFIX + name, String(value));
+  } catch {
+    /* 保存できなくても、アプリは動く */
+  }
+}
 
 /** このアプリが保存したものを、すべて消す */
 export function removeAllStorage() {

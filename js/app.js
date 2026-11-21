@@ -28,19 +28,35 @@ import {
   uid,
   getFlag,
   setFlag,
+  getPref,
+  setPref,
 } from './storage.js';
 import * as lock from './lock.js';
 import { drawBalanceChart } from './chart.js';
 import { icon } from './icons.js';
-import { setupDialogs, openSheet, closeSheet, closeAllDialogs, confirmDialog, alertDialog, askPin, createPinPad, toast } from './ui.js';
+import { createBudgetView } from './budget-view.js';
+import {
+  setupDialogs,
+  openSheet,
+  closeSheet,
+  closeAllDialogs,
+  confirmDialog,
+  alertDialog,
+  askPin,
+  createPinPad,
+  toast,
+  sheetHead,
+  yenField,
+  setError,
+} from './ui.js';
 
-const APP_VERSION = '1.0.1';
+const APP_VERSION = '1.1.0';
 const RELOCK_AFTER_MS = 60 * 1000; // アプリから離れて1分でロック
-const TITLES = { home: '完済ナビ', plan: '返し方の提案', forecast: '完済の予測', records: '返済の記録' };
+const TITLES = { home: '完済ナビ', plan: '返し方の提案', forecast: '完済の予測', records: '返済の記録', budget: '家計' };
 
 let data = loadData();
 const ui = {
-  tab: 'home',
+  tab: TITLES[getPref('tab')] ? getPref('tab') : 'home', // 最後に開いていたタブ（ロック解除後もここから始まる）
   locked: false,
   scenario: null,
   scheduleLimit: 12,
@@ -72,29 +88,8 @@ function persist({ touch = true } = {}) {
   return true;
 }
 
-const sheetHead = (title) => `
-  <div class="sheet-handle" aria-hidden="true"></div>
-  <div class="sheet-head">
-    <h2>${esc(title)}</h2>
-    <button type="button" class="icon-btn" data-action="close-sheet" aria-label="閉じる">${icon('close')}</button>
-  </div>`;
-
-const yenField = (id, label, value = '', extra = '') => `
-  <label class="field">
-    <span class="field-label">${label}</span>
-    <span class="input-wrap"><input class="input" id="${id}" data-yen inputmode="numeric" autocomplete="off" enterkeyhint="next" value="${esc(value)}" ${extra}><span class="suffix">円</span></span>
-    <span class="field-error" id="${id}-err"></span>
-  </label>`;
-
-function setError(id, text) {
-  const input = document.getElementById(id);
-  const err = document.getElementById(`${id}-err`);
-  if (err) err.textContent = text || '';
-  if (input) {
-    if (text) input.setAttribute('aria-invalid', 'true');
-    else input.removeAttribute('aria-invalid');
-  }
-}
+// 家計タブ（今月・収支・履歴・もしも）。画面は js/budget-view.js
+const budgetView = createBudgetView({ getData: () => data, persist, rerender: () => render() });
 
 // =====================================================================
 // 画面の描き分け
@@ -115,12 +110,17 @@ function render() {
   } else if (ui.tab === 'forecast') {
     view.innerHTML = viewForecast();
     drawForecastChart();
+  } else if (ui.tab === 'budget') {
+    budgetView.closePeriods(); // 終わった期間の結果を確定する
+    view.innerHTML = budgetView.html();
+    budgetView.afterRender();
   } else view.innerHTML = viewRecords();
 }
 
 function switchTab(tab) {
   if (!TITLES[tab]) return;
   ui.tab = tab;
+  setPref('tab', tab);
   if (tab === 'forecast') {
     ui.scenario = null;
     ui.scheduleLimit = 12;
@@ -1257,6 +1257,18 @@ function exportBackup() {
   else render();
 }
 
+const BUDGET_EMPTY_TEXT = '入っていません';
+
+/** 家計に入っているものの件数（バックアップの確認ダイアログ用） */
+function budgetCountText(b) {
+  const parts = [];
+  if (b.incomes.length) parts.push(`収入${b.incomes.length}件`);
+  if (b.fixed.length) parts.push(`固定費${b.fixed.length}件`);
+  if (b.entries.length) parts.push(`変わる収入${b.entries.length}件`);
+  if (b.spends.length) parts.push(`出費${b.spends.length}件`);
+  return parts.length ? parts.join('・') : BUDGET_EMPTY_TEXT;
+}
+
 async function importBackup(file) {
   if (file.size > 5 * 1024 * 1024) {
     await alertDialog({ title: '読み込めませんでした', message: 'ファイルが大きすぎます。書き出したバックアップのファイルを選んでください。' });
@@ -1270,11 +1282,19 @@ async function importBackup(file) {
     return;
   }
   const next = parsed.data;
+  const budgetNow = budgetCountText(data.budget);
+  const lines = [
+    parsed.exportedAt ? `${dateText(parsed.exportedAt)}に書き出したファイルです。` : '',
+    `会社 ${next.debts.length}社・記録 ${next.records.length}件${parsed.format >= 2 ? `・家計（${budgetCountText(next.budget)}）` : ''}を読み込みます。`,
+    `今のデータ（会社 ${data.debts.length}社・記録 ${data.records.length}件・家計（${budgetNow}））は消えて、入れ替わります。`,
+  ];
+  // format 1 のファイルには家計が入っていない。読み込むと、今の家計も空になる
+  if (parsed.format < 2 && budgetNow !== BUDGET_EMPTY_TEXT) lines.push('このファイルは古い形式で、家計のデータが入っていません。読み込むと、今の家計は空になります。');
   const ok = await confirmDialog({
     title: 'バックアップを読み込みますか？',
-    message: `${parsed.exportedAt ? `${dateText(parsed.exportedAt)}に書き出したファイルです。\n` : ''}会社 ${next.debts.length}社・記録 ${next.records.length}件を読み込みます。\n今のデータ（会社 ${data.debts.length}社・記録 ${data.records.length}件）は消えて、入れ替わります。`,
+    message: lines.filter(Boolean).join('\n'),
     okLabel: '読み込む',
-    danger: data.debts.length > 0,
+    danger: data.debts.length > 0 || budgetNow !== BUDGET_EMPTY_TEXT,
   });
   if (!ok || ui.locked) return;
   next.meta.lastBackupAt = parsed.exportedAt || data.meta.lastBackupAt;
@@ -1301,7 +1321,7 @@ async function wipeAll() {
 async function confirmWipe() {
   const ok = await confirmDialog({
     title: 'すべてのデータを消しますか？',
-    message: '会社・返済の記録・ロックの設定がすべて消えます。元には戻せません。\n（バックアップのファイルがあれば、読み込んで戻せます）',
+    message: '会社・返済の記録・家計・ロックの設定がすべて消えます。元には戻せません。\n（バックアップのファイルがあれば、読み込んで戻せます。ロックの設定は戻りません）',
     okLabel: 'すべて消す',
     danger: true,
   });
@@ -1409,7 +1429,7 @@ async function forgotPin() {
   if (!ok) return;
   const ok2 = await confirmDialog({
     title: '本当に消しますか？',
-    message: '会社と返済の記録が、すべて消えます。元には戻せません。',
+    message: '会社・返済の記録・家計が、すべて消えます。元には戻せません。',
     okLabel: '消す',
     danger: true,
   });
@@ -1450,6 +1470,7 @@ async function onClick(e) {
   }
   const btn = t.closest('[data-action]');
   if (!btn) return;
+  if (btn.dataset.action.startsWith('b-') && budgetView.onAction(btn)) return; // 家計の操作
   const id = btn.dataset.id;
   switch (btn.dataset.action) {
     case 'add-debt':
@@ -1544,6 +1565,7 @@ function onSubmit(e) {
   if (form.id === 'debt-form') submitDebtForm(form);
   else if (form.id === 'record-form') submitRecordForm(form);
   else if (form.id === 'bulk-form') submitBulkForm(form);
+  else budgetView.onSubmit(form);
 }
 
 function onPlanInput(input) {
@@ -1568,12 +1590,13 @@ function onInput(e) {
     if (t.id === 'r-amount') t.form.dataset.amountDirty = '1';
     if (t.id === 'r-interest') t.form.dataset.interestDirty = '1';
     updateRecordPreview();
-  }
+  } else budgetView.onInput(t);
 }
 
 function onChange(e) {
   const t = e.target;
   if (ui.locked) return;
+  if (ui.tab === 'budget' && budgetView.onChange(t)) return;
   if (t.id === 'record-filter') {
     ui.recordFilter = t.value;
     render();
@@ -1634,7 +1657,9 @@ function init() {
   window.addEventListener(
     'resize',
     debounce(() => {
-      if (ui.tab === 'forecast' && !ui.locked) drawForecastChart();
+      if (ui.locked) return;
+      if (ui.tab === 'forecast') drawForecastChart();
+      else if (ui.tab === 'budget') budgetView.afterRender();
     }, 150),
   );
   window.addEventListener('beforeinstallprompt', (e) => {
@@ -1647,6 +1672,7 @@ function init() {
     if (!ui.locked) render();
   });
   registerServiceWorker();
+  budgetView.closePeriods(); // 閉じている間に終わった期間の結果を確定する（ロック中でも行う。画面には何も出さない）
 
   if (lock.isEnabled()) showLockScreen();
   else {

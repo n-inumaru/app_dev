@@ -335,7 +335,9 @@ test('バックアップ：書き出して読み込むと、同じ家計・借�
   const data = fullData();
   data.debts = [debt({ name: 'テストA社' })];
   data.plan = { lumpSum: 30000, monthlyExtra: 5000 };
-  const back = readBackup(makeBackup(data)).data;
+  const read = readBackup(makeBackup(data));
+  assert.equal(read.format, 2); // 画面が「format 1 のファイルには家計が入っていない」と知らせるのに使う
+  const back = read.data;
   assert.deepEqual(back.budget, data.budget);
   assert.deepEqual(back.debts, data.debts);
   assert.deepEqual(back.plan, data.plan);
@@ -350,6 +352,7 @@ test('バックアップ：format 1（家計なし）のファイルも読める
     data: { debts: [debt({ name: 'テストA社', balance: 80000, payment: 5000 })], records: [], plan: { lumpSum: 0, monthlyExtra: 3000 } },
   };
   const r = readBackup(JSON.stringify(v1));
+  assert.equal(r.format, 1);
   assert.equal(r.exportedAt, '2026-11-20T12:00:00.000Z');
   assert.equal(r.data.debts.length, 1);
   assert.equal(r.data.debts[0].name, 'テストA社');
@@ -359,6 +362,7 @@ test('バックアップ：format 1（家計なし）のファイルも読める
 
 test('バックアップ：format の数字がないファイルも読める（今までどおり）', () => {
   const r = readBackup(JSON.stringify({ app: 'kanzai-navi', data: { debts: [], records: [], plan: {} } }));
+  assert.equal(r.format, 1); // 数字がなければ 1 とみなす
   assert.deepEqual(r.data.budget, emptyBudget());
 });
 

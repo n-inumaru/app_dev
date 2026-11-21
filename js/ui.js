@@ -43,6 +43,35 @@ export function closeAllDialogs() {
   }
 }
 
+/** シートの見出し（タイトルと閉じるボタン） */
+export const sheetHead = (title) => `
+  <div class="sheet-handle" aria-hidden="true"></div>
+  <div class="sheet-head">
+    <h2>${esc(title)}</h2>
+    <button type="button" class="icon-btn" data-action="close-sheet" aria-label="閉じる">${icon('close')}</button>
+  </div>`;
+
+// ---- 入力欄 ----
+
+/** 金額の入力欄（右に「円」）。エラーは id + '-err' の欄に出る */
+export const yenField = (id, label, value = '', extra = '') => `
+  <label class="field">
+    <span class="field-label">${label}</span>
+    <span class="input-wrap"><input class="input" id="${id}" data-yen inputmode="numeric" autocomplete="off" enterkeyhint="next" value="${esc(value)}" ${extra}><span class="suffix">円</span></span>
+    <span class="field-error" id="${id}-err"></span>
+  </label>`;
+
+/** 入力欄の下のエラー表示を入れ替える（空文字で消す） */
+export function setError(id, text) {
+  const input = document.getElementById(id);
+  const err = document.getElementById(`${id}-err`);
+  if (err) err.textContent = text || '';
+  if (input) {
+    if (text) input.setAttribute('aria-invalid', 'true');
+    else input.removeAttribute('aria-invalid');
+  }
+}
+
 // ---- 確認ダイアログ ----
 
 /** @returns {Promise<boolean>} */

@@ -132,8 +132,8 @@ export function usesCount(item, period) {
 
 const monthsOfItem = (item) => (Array.isArray(item.months) ? item.months : []);
 
-/** 払う月か（dueMonth から every か月ごと。every は12の約数） */
-function dueMonths(item) {
+/** ◯か月ごとの固定費を払う月の一覧（dueMonth から every か月ごと。every は12の約数）。画面の表示用にも使う */
+export function dueMonths(item) {
   const every = EVERY_CHOICES.includes(item.every) ? item.every : 12;
   const first = Math.min(Math.max(1, toInt(item.dueMonth) || 1), 12);
   const out = [];
