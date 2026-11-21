@@ -251,6 +251,62 @@ const sumBy = (lines) => lines.reduce((s, l) => s + l.amount, 0);
 /** 期間内の出費 */
 export const spendsIn = (budget, period) => budget.spends.filter((s) => inRange(s.date, period));
 
+export const NO_CATEGORY_LABEL = 'カテゴリなし';
+
+/** 出費のカテゴリの表示名（カテゴリなし・知らないキーは「カテゴリなし」） */
+export const spendCategoryLabel = (key) => SPEND_CATEGORIES.find((c) => c.key === key)?.label ?? NO_CATEGORY_LABEL;
+
+/**
+ * 期間内の出費を、日ごとにまとめる（新しい日が先。同じ日は、あとから記録したものが先）。
+ * limit 件までだけ items に入れる（多いときの「もっと見る」用）。日の合計 total・件数 count は、打ち切られた分も含めた1日の全部。
+ * @returns {{days: {date, total, count, items}[], count, shown}} count＝期間内の出費の全件数、shown＝items に入れた件数
+ */
+export function spendsByDay(budget, period, limit = Infinity) {
+  const list = spendsIn(budget, period).map((s, i) => ({ s, i }));
+  list.sort((a, b) => (a.s.date === b.s.date ? b.i - a.i : a.s.date < b.s.date ? 1 : -1));
+  const days = [];
+  let shown = 0;
+  for (const { s } of list) {
+    let day = days[days.length - 1];
+    if (!day || day.date !== s.date) {
+      day = { date: s.date, total: 0, count: 0, items: [] };
+      days.push(day);
+    }
+    day.total += toYen(s.amount);
+    day.count += 1;
+    if (shown < limit) {
+      day.items.push(s);
+      shown += 1;
+    }
+  }
+  return { days: days.filter((d) => d.items.length > 0), count: list.length, shown };
+}
+
+/**
+ * 期間内の出費を、カテゴリごとに集めて、多い順に並べる（ランキングの横棒用）。
+ * カテゴリなしは「カテゴリなし」として数える。同額なら、カテゴリの並び順（食費…その他、カテゴリなし）。
+ * @returns {{rows: {key, label, total, count, ratio}[], total, count}} ratio＝いちばん多いカテゴリを 1 としたときの割合（棒の長さ用）
+ */
+export function spendsByCategory(budget, period) {
+  const order = [...SPEND_CATEGORIES.map((c) => c.key), ''];
+  const byKey = new Map();
+  let total = 0;
+  let count = 0;
+  for (const s of spendsIn(budget, period)) {
+    const key = order.includes(s.category) ? s.category : '';
+    const row = byKey.get(key) ?? { key, label: spendCategoryLabel(key), total: 0, count: 0, ratio: 0 };
+    row.total += toYen(s.amount);
+    row.count += 1;
+    byKey.set(key, row);
+    total += toYen(s.amount);
+    count += 1;
+  }
+  const rows = [...byKey.values()].sort((a, b) => b.total - a.total || order.indexOf(a.key) - order.indexOf(b.key));
+  const max = rows[0]?.total ?? 0;
+  for (const r of rows) r.ratio = max > 0 ? r.total / max : 0;
+  return { rows, total, count };
+}
+
 /**
  * 期間の金額をまとめて計算する（設計書 4.2）
  * @returns {{period, income, fixed, savings, extra, freeBeforeExtra, free, spent, leftover, incomeLines, fixedLines}}

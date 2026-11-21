@@ -1,7 +1,7 @@
 // サービスワーカー：アプリのファイルをスマホに保存して、電波がなくても開けるようにする。
 // ファイルを変えたら VERSION を上げること（上げないと、スマホに古いファイルが残る）。
 
-const VERSION = '1.1.0';
+const VERSION = '1.2.0';
 const CACHE = `kanzai-navi-${VERSION}`;
 const ASSETS = [
   './',
@@ -9,6 +9,7 @@ const ASSETS = [
   './manifest.webmanifest',
   './css/style.css',
   './js/app.js',
+  './js/budget-spends.js',
   './js/budget-view.js',
   './js/budget.js',
   './js/calc.js',

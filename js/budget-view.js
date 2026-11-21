@@ -24,6 +24,7 @@ import {
 import { BUDGET_LIMITS, getPref, setPref, uid } from './storage.js';
 import { icon } from './icons.js';
 import { closeSheet, confirmDialog, openSheet, setError, sheetHead, toast, yenField } from './ui.js';
+import { createSpendsView } from './budget-spends.js';
 
 const SUBS = [
   ['month', '今月'],
@@ -151,13 +152,16 @@ export function createBudgetView({ getData, persist, rerender }) {
     if (applyClosedPeriods()) persist({ touch: false });
   }
 
-  /** 家計のデータを変えたあとの保存。最初に保存した日（since）を入れる */
-  function commit(message) {
+  /**
+   * 家計のデータを変えたあとの保存。最初に保存した日（since）を入れ、終わった期間の履歴も直す
+   * （確定した期間の出費を変えたときは、その期の使った額と余りが作り直される）。keep なら、シートを閉じない（出費の「続けて入力」）
+   */
+  function commit(message, { keep = false } = {}) {
     const b = getData().budget;
     if (!b.settings.since) b.settings.since = todayISO();
     applyClosedPeriods();
     if (!persist()) return false;
-    closeSheet();
+    if (!keep) closeSheet();
     rerender();
     if (message) toast(message);
     return true;
@@ -281,7 +285,8 @@ export function createBudgetView({ getData, persist, rerender }) {
       <p class="summary-foot">この期間の収入 <strong>${yen(a.income)}</strong> から、固定費・貯金の取り分・返済への上乗せを引いた額です。</p>
     </section>`;
 
-    return `${periodNav(period)}${hero}${barCardHtml(a)}${breakdownHtml(a)}`;
+    // 「今日あと」と「＋ 出費を記録」は毎日使うので、自由に使える額のすぐ下に置く（設計書「14」の1）
+    return `${periodNav(period)}${hero}${spends.summaryHtml(a, period)}${barCardHtml(a)}${breakdownHtml(a)}${spends.listHtml(a, period)}${spends.categoryHtml(period)}`;
   }
 
   function barCardHtml(a) {
@@ -379,6 +384,15 @@ export function createBudgetView({ getData, persist, rerender }) {
     </button>`;
 
   const overrideTag = '<span class="tag accent">この期間だけ変更</span>';
+
+  // 出費の画面（今日あと・記録・一覧・カテゴリ別）。ファイルは js/budget-spends.js
+  const spends = createSpendsView({
+    getData,
+    currentPeriod,
+    commit,
+    rerender,
+    kit: { textField, readYen, md, money, moneyYen, brow, shares, pctText, nowISO, refreshForm },
+  });
 
   function itemsHtml() {
     const data = getData();
@@ -568,6 +582,7 @@ export function createBudgetView({ getData, persist, rerender }) {
     'b-entry-form': { read: readEntryForm, submit: submitEntry, ids: ['be-date', 'be-amount', 'be-memo'] },
     'b-fixed-form': { read: readFixedForm, submit: submitFixed, ids: ['bx-name', 'bx-amount', 'bx-days', 'bx-count', 'bx-ov'], preview: updateFixedPreview },
     'b-savings-form': { read: readSavingsForm, submit: submitSavings, ids: ['bs-value'], preview: updateSavingsPreview },
+    'b-spend-form': spends.form,
   };
 
   function refreshForm(form) {
@@ -1082,7 +1097,7 @@ export function createBudgetView({ getData, persist, rerender }) {
         return true;
       }
       default:
-        return false;
+        return spends.onAction(btn);
     }
   }
 

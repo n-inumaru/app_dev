@@ -1934,6 +1934,146 @@ details[open] > summary::before {
   margin-bottom: 4px;
 }
 
+/* 出費：今日あと・使った額・余り */
+.today-value {
+  margin: 2px 0 6px;
+  font-size: clamp(30px, 9.5vw, 40px);
+  font-weight: 700;
+  line-height: 1.2;
+  letter-spacing: -0.01em;
+  overflow-wrap: anywhere;
+}
+
+.today-value.is-neg {
+  color: var(--critical-ink);
+}
+
+.today-value .icon {
+  width: 0.6em;
+  height: 0.6em;
+  margin-right: 6px;
+  vertical-align: 0.02em;
+}
+
+.today-note {
+  margin-bottom: 14px;
+  color: var(--ink-2);
+  font-size: 14px;
+  line-height: 1.7;
+}
+
+.stat-value.is-neg {
+  color: var(--critical-ink);
+}
+
+.stat-value .icon {
+  width: 18px;
+  height: 18px;
+  margin-right: 4px;
+  vertical-align: -3px;
+}
+
+/* 出費の一覧（日ごと） */
+.day-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 18px 0 2px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--axis);
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.card-sub + .day-head {
+  margin-top: 4px;
+}
+
+.day-name .tag {
+  margin-left: 6px;
+}
+
+.day-total {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* カテゴリ別の出費（ランキングの横棒。1色・値は棒の先・凡例なし） */
+.hbars {
+  display: grid;
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.hbar-name {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 4px;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.hbar-name small {
+  color: var(--ink-2);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.hbar-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 18px;
+  border-left: 1px solid var(--axis);
+}
+
+.hbar {
+  flex: 0 1 auto;
+  width: calc((100% - 116px) * var(--p));
+  min-width: 3px;
+  height: 16px;
+  border-radius: 0 4px 4px 0;
+  background: var(--series-1);
+}
+
+.hbar-val {
+  flex: none;
+  font-size: 14px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* 出費の入力 */
+.chips-4 {
+  grid-template-columns: repeat(4, 1fr);
+}
+
+.chips-4 .chip {
+  padding: 0 2px;
+  font-size: 12.5px;
+  line-height: 1.25;
+}
+
+.spend-status {
+  margin: 0 0 12px;
+  padding: 8px 12px;
+  border-radius: 12px;
+  background: var(--good-wash);
+  color: var(--good-ink);
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.55;
+}
+
+.spend-status:empty {
+  display: none;
+}
+
 /* ---- シートとダイアログ ---- */
 
 dialog {

@@ -14,6 +14,9 @@ import {
   periodOf,
   savingsOf,
   shiftPeriod,
+  spendCategoryLabel,
+  spendsByCategory,
+  spendsByDay,
   syncSnapshotSpent,
   todayGuide,
   usesCount,
@@ -561,6 +564,92 @@ test('出費の同期：確定した期間がなければ空。期間の外の�
   const ms = performance.now() - t0;
   assert.ok(out.length > 0, '出費のある期間が更新される');
   assert.ok(ms < 500, `600期間×出費20000件の同期に ${Math.round(ms)}ms かかった`);
+});
+
+// ---------------- 出費の一覧・カテゴリ別（画面用のまとめ） ----------------
+
+function spendListData() {
+  resetIds();
+  return makeData({
+    spends: [
+      spend({ id: 'a', date: '2026-12-02', amount: 1000, category: 'food' }),
+      spend({ id: 'b', date: '2026-12-05', amount: 300, category: 'food' }),
+      spend({ id: 'c', date: '2026-12-02', amount: 500, category: '' }),
+      spend({ id: 'd', date: '2026-12-05', amount: 2000, category: 'fun' }),
+      spend({ id: 'e', date: '2026-12-05', amount: 700, category: 'food' }),
+      spend({ id: 'x', date: '2026-11-24', amount: 9999, category: 'food' }), // P1 の前日（入らない）
+      spend({ id: 'y', date: '2026-12-25', amount: 9999, category: 'food' }), // P1 の翌日（入らない）
+      spend({ id: 'z', date: '2026-11-25', amount: 40, category: 'daily' }), // P1 の初日（入る）
+    ],
+  });
+}
+
+test('出費の一覧：日ごとにまとめる。新しい日が先、同じ日はあとから記録したものが先。日の合計と件数つき', () => {
+  const r = spendsByDay(spendListData().budget, P1);
+  assert.deepEqual(r.days.map((d) => [d.date, d.total, d.count, d.items.map((s) => s.id)]), [
+    ['2026-12-05', 3000, 3, ['e', 'd', 'b']], // 700 + 2000 + 300
+    ['2026-12-02', 1500, 2, ['c', 'a']], // 500 + 1000
+    ['2026-11-25', 40, 1, ['z']],
+  ]);
+  assert.deepEqual([r.count, r.shown], [6, 6]); // 期間の外の2件は数えない
+});
+
+test('出費の一覧：limit 件で打ち切る。日の合計は、打ち切られた分も含む1日の全部', () => {
+  const r = spendsByDay(spendListData().budget, P1, 4);
+  assert.deepEqual([r.count, r.shown], [6, 4]);
+  assert.deepEqual(r.days.map((d) => [d.date, d.total, d.count, d.items.length]), [
+    ['2026-12-05', 3000, 3, 3],
+    ['2026-12-02', 1500, 2, 1], // 2件のうち1件だけ見せる。合計は 1,500円のまま
+  ]);
+  const none = spendsByDay(spendListData().budget, P1, 0);
+  assert.deepEqual([none.days.length, none.count, none.shown], [0, 6, 0]); // 見せる件数が0なら、日も出さない
+});
+
+test('出費の一覧：出費がなければ空。出費の日付が同じなら、同じ日の中の順序は登録順の逆', () => {
+  resetIds();
+  assert.deepEqual(spendsByDay(makeData().budget, P1), { days: [], count: 0, shown: 0 });
+  const data = makeData({ spends: [spend({ id: '1', date: '2026-12-05', amount: 1 }), spend({ id: '2', date: '2026-12-05', amount: 2 }), spend({ id: '3', date: '2026-12-05', amount: 3 })] });
+  assert.deepEqual(spendsByDay(data.budget, P1).days[0].items.map((s) => s.id), ['3', '2', '1']);
+});
+
+test('カテゴリ別：多い順。カテゴリなしは「カテゴリなし」。期間の外は数えない。ratio は最大を1とした割合', () => {
+  const r = spendsByCategory(spendListData().budget, P1);
+  // 食費 1000+300+700=2000、娯楽 2000、カテゴリなし 500、日用品 40
+  assert.deepEqual(r.rows.map((x) => [x.key, x.label, x.total, x.count]), [
+    ['food', '食費', 2000, 3], // 同額（娯楽と2,000円）は、カテゴリの並び順（食費が先）
+    ['fun', '娯楽', 2000, 1],
+    ['', 'カテゴリなし', 500, 1],
+    ['daily', '日用品', 40, 1],
+  ]);
+  assert.deepEqual([r.total, r.count], [4540, 6]);
+  assert.deepEqual(r.rows.map((x) => x.ratio), [1, 1, 0.25, 0.02]); // 500/2000, 40/2000
+});
+
+test('カテゴリ別：知らないカテゴリは「カテゴリなし」に入れる。出費がなければ空', () => {
+  resetIds();
+  assert.deepEqual(spendsByCategory(makeData().budget, P1), { rows: [], total: 0, count: 0 });
+  const data = makeData({ spends: [spend({ date: '2026-12-05', amount: 100, category: 'nothing' }), spend({ date: '2026-12-05', amount: 50, category: '' })] });
+  const r = spendsByCategory(data.budget, P1);
+  assert.deepEqual(r.rows.map((x) => [x.key, x.total, x.count]), [['', 150, 2]]);
+  assert.equal(spendCategoryLabel('beauty'), '衣服・美容');
+  assert.equal(spendCategoryLabel(''), 'カテゴリなし');
+  assert.equal(spendCategoryLabel('nothing'), 'カテゴリなし');
+});
+
+test('出費のまとめ：データを書き換えない。出費20000件でも速い', () => {
+  const data = spendListData();
+  deepFreeze(data);
+  spendsByDay(data.budget, P1);
+  spendsByCategory(data.budget, P1);
+  const big = spendListData();
+  for (let i = 0; i < 20000; i += 1) big.budget.spends.push(spend({ date: addDays('2026-11-25', i % 30), amount: 1 + (i % 500), category: i % 3 ? 'food' : 'fun' }));
+  const t0 = performance.now();
+  const byDay = spendsByDay(big.budget, P1, 100);
+  const byCat = spendsByCategory(big.budget, P1);
+  const ms = performance.now() - t0;
+  assert.equal(byDay.shown, 100);
+  assert.ok(byCat.rows.length > 0);
+  assert.ok(ms < 200, `出費20000件のまとめに ${Math.round(ms)}ms かかった`);
 });
 
 // ---------------- 4.5 「もしも」 ----------------
