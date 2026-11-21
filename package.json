@@ -5,7 +5,7 @@
   "description": "借金の返済を管理して、余剰金の効率のよい返し方を提案するスマホアプリ（PWA）",
   "type": "module",
   "scripts": {
-    "test": "node --test tests/calc.test.mjs",
+    "test": "node --test tests/*.test.mjs",
     "e2e": "node tests/e2e/e2e.mjs && node tests/e2e/e2e2.mjs",
     "serve": "node tests/e2e/serve.mjs"
   },

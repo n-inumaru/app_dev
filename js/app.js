@@ -34,7 +34,7 @@ import { drawBalanceChart } from './chart.js';
 import { icon } from './icons.js';
 import { setupDialogs, openSheet, closeSheet, closeAllDialogs, confirmDialog, alertDialog, askPin, createPinPad, toast } from './ui.js';
 
-const APP_VERSION = '1.0.0';
+const APP_VERSION = '1.0.1';
 const RELOCK_AFTER_MS = 60 * 1000; // アプリから離れて1分でロック
 const TITLES = { home: '完済ナビ', plan: '返し方の提案', forecast: '完済の予測', records: '返済の記録' };
 
