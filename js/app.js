@@ -52,7 +52,7 @@ import {
   setError,
 } from './ui.js';
 
-const APP_VERSION = '1.3.0';
+const APP_VERSION = '1.3.1';
 const RELOCK_AFTER_MS = 60 * 1000; // アプリから離れて1分でロック
 const TITLES = { home: '完済ナビ', plan: '返し方の提案', forecast: '完済の予測', records: '返済の記録', budget: '家計' };
 
@@ -1425,7 +1425,32 @@ function showLockScreen() {
   lockPad.attachKeyboard();
   const wait = lock.waitRemaining();
   if (wait) startLockWait(wait);
-  else if (st.passkey && document.visibilityState === 'visible') setTimeout(() => tryPasskey(), 300);
+  else if (st.passkey && document.visibilityState === 'visible') tryPasskeyAfterPaint();
+}
+
+/**
+ * ロック画面が描かれたら、すぐ指紋・顔認証を呼ぶ（以前は、固定で0.3秒待っていた）。
+ * 画面にまだフォーカスがないとき（起動した直後など）は、ブラウザが認証を断ることがあるので、フォーカスが来るのを待つ（最大0.3秒）。
+ */
+function tryPasskeyAfterPaint() {
+  requestAnimationFrame(() =>
+    requestAnimationFrame(() => {
+      if (!ui.locked) return;
+      if (document.hasFocus()) {
+        tryPasskey();
+        return;
+      }
+      let called = false;
+      const go = () => {
+        if (called) return;
+        called = true;
+        window.removeEventListener('focus', go);
+        tryPasskey();
+      };
+      window.addEventListener('focus', go);
+      setTimeout(go, 300);
+    }),
+  );
 }
 
 function startLockWait(ms) {

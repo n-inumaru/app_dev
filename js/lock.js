@@ -195,7 +195,9 @@ export async function unlockWithPasskey(signal) {
     publicKey: {
       challenge,
       rpId: location.hostname,
-      allowCredentials: [{ type: 'public-key', id: fromB64u(l.passkey.id) }],
+      // このパスキーは、この端末の中（platform）に登録したもの。そう伝えると、ブラウザは別の端末（Bluetooth・QRコード）を探さず、すぐ端末の指紋・顔認証を出せる
+      allowCredentials: [{ type: 'public-key', id: fromB64u(l.passkey.id), transports: ['internal'] }],
+      hints: ['client-device'], // 対応しているブラウザでは、「この端末」の認証を直接出す（対応していなければ無視される）
       userVerification: 'required',
       timeout: 120000,
     },

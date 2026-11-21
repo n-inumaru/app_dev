@@ -218,9 +218,31 @@ ok(lockSaved.passkey.alg === -7 && !!lockSaved.passkey.publicKey, '公開鍵（E
 await shot('settings-locked', false);
 
 step('開き直すと、指紋・顔認証で自動で解除される');
+// ロック画面が出てから、指紋・顔認証を呼ぶまでの時間を測る仕掛け（以前は、固定で0.3秒待っていた）
+await page.addInitScript(() => {
+  const t = (window.__lockTiming = {});
+  const orig = navigator.credentials.get.bind(navigator.credentials);
+  navigator.credentials.get = (...a) => {
+    t.getCalled ??= performance.now();
+    return orig(...a);
+  };
+  document.addEventListener('DOMContentLoaded', () => {
+    const lock = document.getElementById('lock');
+    const check = () => {
+      if (!lock.hidden && t.lockShown === undefined) t.lockShown = performance.now();
+    };
+    new MutationObserver(check).observe(lock, { attributes: true, attributeFilter: ['hidden'] });
+    check();
+  });
+});
 await page.reload();
 await page.waitForSelector('#app:not([hidden])', { timeout: 8000 });
 ok(true, 'パスキーで解除できた（署名の検証も通過）');
+{
+  const t = await page.evaluate(() => window.__lockTiming);
+  const gap = t.getCalled - t.lockShown;
+  ok(Number.isFinite(gap) && gap < 150, `ロック画面が出てから、指紋・顔認証を呼ぶまで ${Math.round(gap)}ms（150ms未満。固定の待ち時間を入れていない）`);
+}
 for (let i = 0; i < 5; i++) {
   await page.reload();
   await page.waitForSelector('#app:not([hidden])', { timeout: 8000 });
