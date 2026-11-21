@@ -25,6 +25,7 @@ import { BUDGET_LIMITS, getPref, setPref, uid } from './storage.js';
 import { icon } from './icons.js';
 import { closeSheet, confirmDialog, openSheet, setError, sheetHead, toast, yenField } from './ui.js';
 import { createSpendsView } from './budget-spends.js';
+import { createHistoryView } from './budget-history.js';
 
 const SUBS = [
   ['month', '今月'],
@@ -202,6 +203,7 @@ export function createBudgetView({ getData, persist, rerender }) {
     </div>`;
     if (state.sub === 'month') return subs + monthHtml();
     if (state.sub === 'items') return subs + itemsHtml();
+    if (state.sub === 'history') return subs + historyView.html();
     return subs + comingSoonHtml(state.sub);
   }
 
@@ -393,6 +395,9 @@ export function createBudgetView({ getData, persist, rerender }) {
     rerender,
     kit: { textField, readYen, md, money, moneyYen, brow, shares, pctText, nowISO, refreshForm },
   });
+
+  // 履歴の画面（期間ごとの結果・前の期間との比べ・最近12期間の棒グラフ）。ファイルは js/budget-history.js
+  const historyView = createHistoryView({ getData, rerender, kit: { md, moneyYen, emptyGuideHtml } });
 
   function itemsHtml() {
     const data = getData();
@@ -1016,6 +1021,7 @@ export function createBudgetView({ getData, persist, rerender }) {
   }
 
   function go(sub) {
+    if (sub !== state.sub) historyView.reset();
     state.sub = sub;
     setPref('budget-tab', sub);
     rerender();
@@ -1097,7 +1103,7 @@ export function createBudgetView({ getData, persist, rerender }) {
         return true;
       }
       default:
-        return spends.onAction(btn);
+        return spends.onAction(btn) || historyView.onAction(btn);
     }
   }
 

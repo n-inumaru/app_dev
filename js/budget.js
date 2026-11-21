@@ -53,6 +53,7 @@ const toInt = (v) => {
 };
 const toYen = (v) => Math.max(0, toInt(v));
 const inRange = (iso, period) => iso >= period.start && iso <= period.end;
+const byStart = (a, b) => (a.start < b.start ? -1 : a.start > b.start ? 1 : 0); // 期間（{start}）を開始日の古い順に
 
 // ---- 4.1 期間（給料日サイクル） ----
 
@@ -408,28 +409,121 @@ export function pendingSnapshots(data, today, now = new Date().toISOString()) {
  * 収入・固定費・貯金・上乗せ・自由に使える額は確定のまま、spent と leftover（＝free − spent）だけ更新する。
  * 変わったスナップショットだけを、新しいオブジェクトで返す（data は書き換えない）。
  * 保存するには、戻り値を data.budget.snapshots[s.start] = s で入れる。出費を変えるたびと、起動時に呼ぶ。
+ *
+ * 給料日を変えると、確定した期間どうしが重なることがある（historyOf の split）。重なった日の出費は、
+ * その日を含む期間のすべてに数える（どれか1つにだけ入れると、確定した値が起動のたびに書き換わってしまう）。
  */
 export function syncSnapshotSpent(data) {
-  const snaps = Object.values(data.budget.snapshots).sort((a, b) => (a.start < b.start ? -1 : a.start > b.start ? 1 : 0));
+  const snaps = Object.values(data.budget.snapshots).sort(byStart);
   if (snaps.length === 0) return [];
-  const sums = new Map(snaps.map((s) => [s.start, 0]));
-  for (const sp of data.budget.spends) {
-    // 出費の日付を含む確定済みの期間を、開始日の二分探索で探す
+  // 出費を日付順にして、累計から「期間の初日〜最終日」の合計を引き算で出す（期間が重なっていても、1期間ずつ正しく数えられる）
+  const list = data.budget.spends.map((sp) => ({ date: sp.date, amount: toYen(sp.amount) })).sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+  const prefix = new Array(list.length + 1);
+  prefix[0] = 0;
+  for (let i = 0; i < list.length; i += 1) prefix[i + 1] = prefix[i] + list[i].amount;
+  // iso 以上（strict なら、iso より後）の最初の位置
+  const firstFrom = (iso, strict) => {
     let lo = 0;
-    let hi = snaps.length - 1;
-    let found = -1;
-    while (lo <= hi) {
+    let hi = list.length;
+    while (lo < hi) {
       const mid = (lo + hi) >> 1;
-      if (snaps[mid].start <= sp.date) {
-        found = mid;
-        lo = mid + 1;
-      } else {
-        hi = mid - 1;
-      }
+      if (strict ? list[mid].date <= iso : list[mid].date < iso) lo = mid + 1;
+      else hi = mid;
     }
-    if (found >= 0 && sp.date <= snaps[found].end) sums.set(snaps[found].start, sums.get(snaps[found].start) + toYen(sp.amount));
+    return lo;
+  };
+  const changed = [];
+  for (const s of snaps) {
+    const spent = prefix[firstFrom(s.end, true)] - prefix[firstFrom(s.start, false)];
+    if (s.spent !== spent) changed.push({ ...s, spent, leftover: s.free - spent });
   }
-  return snaps.filter((s) => s.spent !== sums.get(s.start)).map((s) => ({ ...s, spent: sums.get(s.start), leftover: s.free - sums.get(s.start) }));
+  return changed;
+}
+
+// ---- 4.4 履歴の画面用のまとめ ----
+
+/** 履歴の棒グラフに出す期間の数（最近12期間） */
+export const HISTORY_CHART_COUNT = 12;
+
+/**
+ * 履歴の画面に出すものをまとめる。確定したスナップショットの値は、そのまま使う（作り直さない・消さない）。
+ * data は書き換えない。「今日」は引数で受け取る。
+ *
+ * 給料日を変えると、確定済みの履歴（古い区切り）と、新しい区切りで確定した期間が重なる（設計書「13」の次のフェーズ）。
+ * 重なった組のうち、先に確定した方（closedAt が小さい方）に split を付ける＝「給料日を変える前の区切り」。
+ * 今の期間（まだ確定していない）と重なる確定済みの期間も、同じ扱い。split の行は、棒グラフと「前の期間との比べ」には入れない
+ * （同じ日の出費を二重に数えるため）。一覧には、そのまま並べる。
+ *
+ * @returns {{rows, current, chart, splitCount}}
+ *   rows＝確定した期間（開始日の新しい順）。各行は スナップショット＋ { split, prev }。
+ *     prev＝前の期間（split でない、ひとつ前の期間）との差 { start, spentDiff, leftoverDiff }（使った額・余りの増減）。なければ null。split の行は null
+ *   current＝今の期間（途中）{ period, income, fixed, free, spent, leftover }
+ *   chart＝{ bars, zero }。bars＝split でない最近 chartCount 期間（古い順）に { up, down }（余りが＋なら up、−なら down。棒の長さの割合。
+ *     up＋down の最大が、zero を境に上下で 1 になる）、zero＝ゼロの線の位置（上端から 0〜1。マイナスがなければ 1）
+ *   splitCount＝split の期間の数
+ */
+export function historyOf(data, today, chartCount = HISTORY_CHART_COUNT) {
+  const { settings, snapshots } = data.budget;
+  const snaps = Object.values(snapshots).sort(byStart);
+  const period = periodOf(settings, today);
+
+  // 期間の重なりを調べる。開始日順に並べて、「次の期間の開始日 ≦ この期間の終了日」の間だけ見る
+  const all = [...snaps.map((s) => ({ start: s.start, end: s.end, closedAt: s.closedAt })), { start: period.start, end: period.end, closedAt: '￿', current: true }].sort(byStart);
+  const split = new Set();
+  for (let i = 0; i < all.length; i += 1) {
+    for (let j = i + 1; j < all.length && all[j].start <= all[i].end; j += 1) {
+      const older = all[i].closedAt <= all[j].closedAt ? all[i] : all[j];
+      if (!older.current) split.add(older.start);
+    }
+  }
+
+  const chain = snaps.filter((s) => !split.has(s.start)); // 比べ・棒グラフに使う期間（古い順）
+  const prevOf = new Map();
+  chain.forEach((s, i) => {
+    if (i > 0) prevOf.set(s.start, chain[i - 1]);
+  });
+  const rows = snaps
+    .map((s) => {
+      const p = prevOf.get(s.start);
+      return { ...s, split: split.has(s.start), prev: p ? { start: p.start, spentDiff: s.spent - p.spent, leftoverDiff: s.leftover - p.leftover } : null };
+    })
+    .reverse();
+
+  const recent = chain.slice(-chartCount);
+  let posMax = 0;
+  let negMax = 0;
+  for (const s of recent) {
+    if (s.leftover > posMax) posMax = s.leftover;
+    if (-s.leftover > negMax) negMax = -s.leftover;
+  }
+  const span = posMax + negMax;
+  const bars = recent.map((s) => ({ ...s, up: span && s.leftover > 0 ? s.leftover / span : 0, down: span && s.leftover < 0 ? -s.leftover / span : 0 }));
+
+  const a = periodAmounts(data, period);
+  return {
+    rows,
+    current: { period, income: a.income, fixed: a.fixed, free: a.free, spent: a.spent, leftover: a.leftover },
+    chart: { bars, zero: span ? posMax / span : 1 },
+    splitCount: split.size,
+  };
+}
+
+// ---- 7. 完済ナビとの連携 ----
+
+/**
+ * 提案画面の目安：返済への上乗せの前の「自由に使える額」（今の期間）と、毎月の余剰金がそれを超えているか。
+ * 家計に何も入れていないとき（isBudgetEmpty）は null（目安を出さない）。data は書き換えない。
+ * @returns {null | {period, free, extra, negative, over, overBy}}
+ *   free＝上乗せの前の自由に使える額、negative＝それがマイナス、over＝毎月の余剰金（extra）が、free（マイナスなら0）を超えている、
+ *   overBy＝超えている額（over でなければ 0）
+ */
+export function extraGuide(data, today) {
+  if (isBudgetEmpty(data.budget)) return null;
+  const period = periodOf(data.budget.settings, today);
+  const free = periodAmounts(data, period).freeBeforeExtra;
+  const extra = toYen(data.plan?.monthlyExtra);
+  const room = Math.max(0, free);
+  return { period, free, extra, negative: free < 0, over: extra > room, overBy: Math.max(0, extra - room) };
 }
 
 // ---- 4.5 「もしも」 ----

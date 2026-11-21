@@ -6,7 +6,7 @@
   "type": "module",
   "scripts": {
     "test": "node --test tests/*.test.mjs",
-    "e2e": "node tests/e2e/e2e.mjs && node tests/e2e/e2e2.mjs && node tests/e2e/e2e-budget.mjs && node tests/e2e/e2e-spends.mjs",
+    "e2e": "node tests/e2e/e2e.mjs && node tests/e2e/e2e2.mjs && node tests/e2e/e2e-budget.mjs && node tests/e2e/e2e-spends.mjs && node tests/e2e/e2e-history.mjs",
     "serve": "node tests/e2e/serve.mjs"
   },
   "devDependencies": {

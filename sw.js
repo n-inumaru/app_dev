@@ -9,6 +9,7 @@ const ASSETS = [
   './manifest.webmanifest',
   './css/style.css',
   './js/app.js',
+  './js/budget-history.js',
   './js/budget-spends.js',
   './js/budget-view.js',
   './js/budget.js',

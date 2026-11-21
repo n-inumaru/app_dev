@@ -110,7 +110,7 @@ await shot('month-empty');
 
 step('履歴・もしもは「準備中」');
 await subTab('history');
-ok((await text('.empty h2')) === '履歴は準備中です', '履歴：準備中');
+ok((await text('.empty h2')).includes('収入と固定費を入れましょう'), '履歴：何も入れていないときは、入れる案内（履歴の中身は e2e-history.mjs）');
 await subTab('whatif');
 ok((await text('.empty h2')) === 'もしもは準備中です', 'もしも：準備中');
 await shot('whatif-soon');

@@ -4,7 +4,9 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   countWeekdays,
+  extraGuide,
   fixedLines,
+  historyOf,
   incomeLines,
   isBudgetEmpty,
   makeSnapshot,
@@ -650,6 +652,170 @@ test('出費のまとめ：データを書き換えない。出費20000件でも
   assert.equal(byDay.shown, 100);
   assert.ok(byCat.rows.length > 0);
   assert.ok(ms < 200, `出費20000件のまとめに ${Math.round(ms)}ms かかった`);
+});
+
+// ---------------- 4.4 履歴の画面用のまとめ ----------------
+
+/** 確定した期間（架空）。余り＝自由に使える額 − 使った額 */
+const snapOf = (start, end, free, spent, closedAt = '2026-11-25T00:00:00.000Z') => ({ start, end, income: free + 70000, fixed: 70000, savings: 0, extra: 0, free, spent, leftover: free - spent, closedAt });
+const withSnaps = (list, settings = {}) => {
+  resetIds();
+  const data = makeData({ settings: { since: '2026-09-01', ...settings }, incomes: [income({ amount: 250000 })], fixed: [fixed({ amount: 70000 })] });
+  for (const s of list) data.budget.snapshots[s.start] = s;
+  return data;
+};
+// 給料日25日・今日 11/26 の期間：9/25〜10/22、10/23〜11/24（10/25 が日曜なので前倒し）、今の期間 11/25〜12/24
+const H_A = snapOf('2026-09-25', '2026-10-22', 180000, 5000); // 余り 175,000
+const H_B = snapOf('2026-10-23', '2026-11-24', 180000, 15000); // 余り 165,000
+
+test('履歴：新しい期間が上。値は確定した値のまま。前の期間との差（使った額・余り）が付く', () => {
+  const h = historyOf(withSnaps([H_A, H_B]), '2026-11-26');
+  assert.deepEqual(h.rows.map((r) => r.start), ['2026-10-23', '2026-09-25']);
+  assert.deepEqual(h.rows.map((r) => [r.free, r.spent, r.leftover, r.split]), [[180000, 15000, 165000, false], [180000, 5000, 175000, false]]);
+  assert.deepEqual(h.rows[0].prev, { start: '2026-09-25', spentDiff: 10000, leftoverDiff: -10000 }); // 15,000−5,000 と 165,000−175,000
+  assert.equal(h.rows[1].prev, null); // いちばん古い期間は、比べる相手がない
+  assert.equal(h.splitCount, 0);
+});
+
+test('履歴：今の期間（途中）は rows に入れず、current に分ける。棒グラフにも入れない', () => {
+  const data = withSnaps([H_A, H_B]);
+  data.budget.spends.push(spend({ date: '2026-11-26', amount: 1200 }));
+  const h = historyOf(data, '2026-11-26');
+  assert.equal(h.rows.length, 2);
+  // 今の期間：収入 250,000 − 固定費 70,000 ＝ 180,000、使った額 1,200、余り 178,800
+  assert.deepEqual([h.current.period.start, h.current.free, h.current.spent, h.current.leftover], ['2026-11-25', 180000, 1200, 178800]);
+  assert.deepEqual(h.chart.bars.map((b) => b.start), ['2026-09-25', '2026-10-23']);
+});
+
+test('履歴：棒グラフは余りで描く。マイナス（オーバー）がなければ、ゼロの線は下端（zero＝1）', () => {
+  const h = historyOf(withSnaps([H_A, H_B]), '2026-11-26');
+  assert.equal(h.chart.zero, 1);
+  assert.deepEqual(h.chart.bars.map((b) => [b.up, b.down]), [[1, 0], [165000 / 175000, 0]]); // 最大の余り（175,000）が 1
+});
+
+test('履歴：余りがマイナスの期は、ゼロの線より下へ伸びる（zero＝上の長さ ÷ 全体の長さ）', () => {
+  const over = snapOf('2026-10-23', '2026-11-24', 180000, 230000); // 余り −50,000
+  const good = snapOf('2026-09-25', '2026-10-22', 180000, 80000); // 余り 100,000
+  const h = historyOf(withSnaps([good, over]), '2026-11-26');
+  assert.equal(h.chart.zero, 100000 / 150000); // 上 100,000・下 50,000 の合計 150,000
+  assert.deepEqual(h.chart.bars.map((b) => [b.start, b.up, b.down]), [['2026-09-25', 100000 / 150000, 0], ['2026-10-23', 0, 50000 / 150000]]);
+  assert.equal(h.rows[0].leftover, -50000); // 一覧の値は、そのまま
+  assert.deepEqual([h.rows[0].prev.spentDiff, h.rows[0].prev.leftoverDiff], [150000, -150000]);
+});
+
+test('履歴：余りが全部0・履歴がない・今の期間だけのとき（棒なし）', () => {
+  const zero = historyOf(withSnaps([snapOf('2026-10-23', '2026-11-24', 100, 100)]), '2026-11-26');
+  assert.deepEqual([zero.chart.zero, zero.chart.bars[0].up, zero.chart.bars[0].down], [1, 0, 0]);
+  const none = historyOf(withSnaps([]), '2026-11-26');
+  assert.deepEqual([none.rows, none.chart.bars, none.chart.zero, none.splitCount], [[], [], 1, 0]);
+  assert.equal(none.current.period.start, '2026-11-25');
+});
+
+test('履歴：棒グラフは最近12期間（古い順）。一覧には全部ある', () => {
+  const list = [];
+  for (let i = 0, p = shiftPeriod(S(), P1, -1); i < 15; i += 1, p = shiftPeriod(S(), p, -1)) list.push(snapOf(p.start, p.end, 100000, 1000 * (i + 1)));
+  const h = historyOf(withSnaps(list, { since: '2020-01-01' }), '2026-11-26');
+  assert.equal(h.rows.length, 15);
+  assert.equal(h.chart.bars.length, 12);
+  assert.deepEqual([h.chart.bars[0].start, h.chart.bars[11].start], [list[11].start, list[0].start]); // 古い→新しい
+  assert.equal(historyOf(withSnaps(list, { since: '2020-01-01' }), '2026-11-26', 5).chart.bars.length, 5);
+});
+
+test('履歴：給料日を変えて重なった期間は、先に確定した方に「給料日を変える前の区切り」の印（split）。消さない。比べ・棒グラフには入れない', () => {
+  // 給料日25日 → 10日に変更（前倒しなし）。今日 11/26 の今の期間は 11/10〜12/9
+  const old1 = snapOf('2026-09-25', '2026-10-22', 180000, 5000, '2026-10-23T00:00:00.000Z');
+  const old2 = snapOf('2026-10-23', '2026-11-24', 180000, 15000, '2026-11-25T00:00:00.000Z');
+  const new1 = snapOf('2026-09-10', '2026-10-09', 180000, 7000, '2026-11-26T00:00:00.000Z'); // 変更後に、新しい区切りで確定した分
+  const new2 = snapOf('2026-10-10', '2026-11-09', 180000, 9000, '2026-11-26T00:00:00.000Z');
+  const data = withSnaps([old1, old2, new1, new2], { payday: 10, shiftEarly: false });
+  const h = historyOf(data, '2026-11-26');
+  assert.deepEqual(h.rows.map((r) => [r.start, r.split]), [['2026-10-23', true], ['2026-10-10', false], ['2026-09-25', true], ['2026-09-10', false]]); // 開始日順にそのまま並ぶ
+  assert.equal(h.splitCount, 2);
+  assert.deepEqual(h.rows.map((r) => r.prev && r.prev.start), [null, '2026-09-10', null, null]); // split の行は比べない。new2 は new1（split でない前の期間）と比べる
+  assert.deepEqual([h.rows[1].prev.spentDiff, h.rows[1].prev.leftoverDiff], [2000, -2000]);
+  assert.deepEqual(h.chart.bars.map((b) => b.start), ['2026-09-10', '2026-10-10']); // 棒グラフには split を入れない
+  assert.deepEqual(h.rows.map((r) => r.spent), [15000, 9000, 5000, 7000]); // 確定した値は、そのまま
+  assert.equal(Object.keys(data.budget.snapshots).length, 4); // 消さない・作り直さない
+});
+
+test('履歴：今の期間と重なる確定済みの期間も split（新しい区切りの履歴がまだないとき）', () => {
+  const old2 = snapOf('2026-10-23', '2026-11-24', 180000, 15000, '2026-11-25T00:00:00.000Z'); // 今の期間 11/10〜12/9 と重なる
+  const h = historyOf(withSnaps([old2], { payday: 10, shiftEarly: false }), '2026-11-26');
+  assert.deepEqual(h.rows.map((r) => [r.start, r.split]), [['2026-10-23', true]]);
+  assert.deepEqual(h.chart.bars, []);
+  const same = historyOf(withSnaps([old2]), '2026-11-26'); // 給料日が同じなら、今の期間（11/25〜）とは重ならない
+  assert.equal(same.rows[0].split, false);
+});
+
+test('出費の同期：期間が重なっていても、その日を含む期間のすべてに出費を数える（確定した値が書き換わらない）', () => {
+  // 履歴の split のテストと同じ4期間。出費は、各期間の合計が確定した値と合うように置く
+  const old1 = snapOf('2026-09-25', '2026-10-22', 180000, 5000, '2026-10-23T00:00:00.000Z'); // 2,000 + 3,000
+  const old2 = snapOf('2026-10-23', '2026-11-24', 180000, 9000, '2026-11-25T00:00:00.000Z'); // 4,000 + 5,000
+  const new1 = snapOf('2026-09-10', '2026-10-09', 180000, 3000, '2026-11-26T00:00:00.000Z'); // 1,000 + 2,000
+  const new2 = snapOf('2026-10-10', '2026-11-09', 180000, 7000, '2026-11-26T00:00:00.000Z'); // 3,000 + 4,000
+  const data = withSnaps([old1, old2, new1, new2], { payday: 10, shiftEarly: false });
+  data.budget.spends.push(
+    spend({ date: '2026-09-12', amount: 1000 }), // new1 だけ
+    spend({ date: '2026-09-28', amount: 2000 }), // old1 と new1
+    spend({ date: '2026-10-15', amount: 3000 }), // old1 と new2
+    spend({ date: '2026-10-30', amount: 4000 }), // old2 と new2
+    spend({ date: '2026-11-12', amount: 5000 }), // old2 だけ（new2 は 11/9 まで）
+    spend({ date: '2026-12-01', amount: 9999 }), // どの期間にも入らない
+  );
+  assert.deepEqual(syncSnapshotSpent(data), []); // 全部、確定した値のまま
+  data.budget.spends.push(spend({ date: '2026-10-25', amount: 100 })); // old2 と new2 の重なり（10/23〜11/9）
+  assert.deepEqual(syncSnapshotSpent(data).map((s) => [s.start, s.spent, s.leftover]), [['2026-10-10', 7100, 172900], ['2026-10-23', 9100, 170900]]);
+});
+
+test('履歴：同じ時刻に確定した重なりでも止まらない（開始日が早い方に印）。データは書き換えない。600期間でも速い', () => {
+  const a = snapOf('2026-10-01', '2026-10-31', 1, 0, 'T');
+  const b = snapOf('2026-10-20', '2026-11-19', 1, 0, 'T');
+  assert.deepEqual(historyOf(withSnaps([a, b]), '2026-11-26').rows.map((r) => [r.start, r.split]), [['2026-10-20', false], ['2026-10-01', true]]);
+  const data = deepFreeze(withSnaps([H_A, H_B]));
+  historyOf(data, '2026-11-26'); // 書き換え禁止でも動く
+  const list = [];
+  for (let i = 0, p = shiftPeriod(S(), P1, -1); i < 600; i += 1, p = shiftPeriod(S(), p, -1)) list.push(snapOf(p.start, p.end, 100000, i % 7 === 0 ? 120000 : 50000));
+  const big = withSnaps(list, { since: '1990-01-01' });
+  const t0 = performance.now();
+  const h = historyOf(big, '2026-11-26');
+  const ms = performance.now() - t0;
+  assert.equal(h.rows.length, 600);
+  assert.ok(ms < 200, `履歴600期間のまとめに ${Math.round(ms)}ms かかった`);
+});
+
+// ---------------- 7. 完済ナビとの連携（提案画面の目安） ----------------
+
+test('提案の目安：上乗せの前の自由に使える額（今の期間）。毎月の余剰金がそれ以下なら、超えていない', () => {
+  const { data } = scenario(); // 今の期間 P1：自由に使える額 625,000（上乗せ 5,000 を引いたあと）→ 上乗せの前は 630,000
+  const g = extraGuide(data, '2026-11-26');
+  assert.deepEqual([g.period.start, g.free, g.extra, g.negative, g.over, g.overBy], ['2026-11-25', 630000, 5000, false, false, 0]);
+  data.plan.monthlyExtra = 630000; // ちょうど同じ額は、超えていない
+  assert.equal(extraGuide(data, '2026-11-26').over, false);
+});
+
+test('提案の目安：毎月の余剰金が目安を超えたら over。超えた額も出る', () => {
+  const { data } = scenario();
+  data.plan.monthlyExtra = 700000;
+  const g = extraGuide(data, '2026-11-26');
+  assert.deepEqual([g.free, g.extra, g.over, g.overBy], [630000, 700000, true, 70000]); // 700,000 − 630,000
+});
+
+test('提案の目安：上乗せの前でもマイナスなら negative。余剰金が0でなければ、全額が超えている', () => {
+  resetIds();
+  const data = makeData({ debts: [debt({ payment: 10000 })], incomes: [income({ amount: 100000 })], fixed: [fixed({ amount: 150000 })] }); // 100,000 − 150,000 − 返済 10,000 ＝ −60,000
+  const g0 = extraGuide(data, '2026-11-26');
+  assert.deepEqual([g0.free, g0.negative, g0.over, g0.overBy], [-60000, true, false, 0]); // 余剰金0なら、超えてはいない
+  data.plan.monthlyExtra = 10000;
+  const g1 = extraGuide(data, '2026-11-26');
+  assert.deepEqual([g1.negative, g1.over, g1.overBy], [true, true, 10000]);
+});
+
+test('提案の目安：家計に何も入れていなければ null（目安を出さない）。出費だけでも出す。データは書き換えない', () => {
+  resetIds();
+  assert.equal(extraGuide(makeData({ debts: [debt()], plan: { monthlyExtra: 5000 } }), '2026-11-26'), null);
+  const onlySpend = makeData({ debts: [debt({ payment: 10000 })], plan: { monthlyExtra: 5000 }, spends: [spend({ date: '2026-11-26', amount: 100 })] });
+  assert.equal(extraGuide(onlySpend, '2026-11-26').free, -10000); // 収入なし・返済 10,000 だけ
+  extraGuide(deepFreeze(scenario().data), '2026-11-26');
 });
 
 // ---------------- 4.5 「もしも」 ----------------

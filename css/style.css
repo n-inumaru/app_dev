@@ -2074,6 +2074,269 @@ details[open] > summary::before {
   display: none;
 }
 
+/* ---- 履歴（js/budget-history.js） ---- */
+
+/* 最近12期間の余りの棒。ゼロの線から、＋は上・マイナス（オーバー）は下へ。青＝余り・赤＝オーバー（validate_palette.js で両モード合格） */
+.hs-plot {
+  --zero: 1;
+  position: relative;
+  display: flex;
+  height: 160px;
+}
+
+.hs-zero {
+  position: absolute;
+  top: calc(var(--zero) * 100%);
+  right: 0;
+  left: 0;
+  border-top: 1px solid var(--axis);
+  pointer-events: none;
+  transform: translateY(-1px);
+}
+
+.hs-col {
+  position: relative;
+  flex: 1 1 0;
+  min-width: 0;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+}
+
+.hs-col[aria-pressed="true"] {
+  background: var(--surface-2);
+}
+
+.hs-col:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 1px;
+}
+
+.hs-up,
+.hs-down {
+  position: absolute;
+  left: 50%;
+  width: min(20px, calc(100% - 4px));
+  min-height: 2px;
+  transform: translateX(-50%);
+}
+
+.hs-up {
+  bottom: calc((1 - var(--zero)) * 100%);
+  border-radius: 4px 4px 0 0;
+  background: var(--series-1);
+}
+
+.hs-down {
+  top: calc(var(--zero) * 100%);
+  border-radius: 0 0 4px 4px;
+  background: var(--critical);
+}
+
+.hs-axis {
+  display: flex;
+  margin-top: 4px;
+  color: var(--ink-2);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.hs-axis span {
+  flex: 1 1 0;
+  min-width: 0;
+  text-align: center;
+}
+
+.hs-axis-note {
+  margin: 4px 0 0;
+  font-size: 12px;
+  text-align: center;
+}
+
+.hs-readout {
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr) 44px;
+  align-items: center;
+  gap: 4px;
+  margin: 10px 0;
+  padding: 4px;
+  border-radius: 12px;
+  background: var(--surface-2);
+}
+
+.hs-ro-body {
+  min-width: 0;
+  color: var(--ink-2);
+  font-size: 13px;
+  line-height: 1.6;
+  text-align: center;
+}
+
+.hs-ro-title {
+  color: var(--ink);
+  font-weight: 700;
+}
+
+.hs-ro-nums {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0 12px;
+}
+
+.hs-ro-nums span {
+  white-space: nowrap; /* 折り返すのは、項目と項目の間だけ */
+}
+
+.hs-ro-nums strong {
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+
+.hs-ro-nums .is-neg,
+.hs-ro-nums .is-neg strong {
+  color: var(--critical-ink);
+  font-weight: 700;
+}
+
+.hs-ro-nums .icon {
+  width: 14px;
+  height: 14px;
+  margin-right: 2px;
+  vertical-align: -2px;
+}
+
+.hs-legend {
+  margin-bottom: 0;
+}
+
+.hs-legend li {
+  flex-wrap: wrap;
+  gap: 2px 8px;
+}
+
+.hs-legend .icon {
+  width: 14px;
+  height: 14px;
+  margin-left: -4px;
+  color: var(--critical-ink);
+}
+
+.hs-sw-up {
+  background: var(--series-1);
+}
+
+.hs-sw-down {
+  background: var(--critical);
+}
+
+.data-table td small {
+  display: block;
+  font-size: 11px;
+}
+
+/* 期間ごとの一覧 */
+.hs-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.hs-row {
+  padding: 12px 0;
+  border-top: 1px solid var(--grid);
+}
+
+.hs-list > .hs-row:first-child {
+  border-top: 0;
+}
+
+.hs-row.is-now {
+  margin-bottom: 4px;
+  padding: 12px;
+  border: 1px dashed var(--axis);
+  border-radius: 12px;
+  background: var(--surface-2);
+}
+
+.hs-row.is-now + .hs-row {
+  border-top: 0;
+}
+
+.hs-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  margin-bottom: 8px;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.hs-nums {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0;
+}
+
+.hs-nums > div {
+  min-width: 0;
+}
+
+.hs-nums dt {
+  color: var(--ink-2);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.hs-nums dd {
+  margin: 2px 0 0;
+  font-size: 15px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.hs-nums dd small {
+  display: block;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.hs-nums .is-neg dd {
+  color: var(--critical-ink);
+}
+
+.hs-nums dd .icon {
+  width: 15px;
+  height: 15px;
+  margin-right: 2px;
+  vertical-align: -2px;
+}
+
+.hs-diff {
+  margin-top: 8px;
+  color: var(--ink-2);
+  font-size: 12.5px;
+  line-height: 1.7;
+}
+
+.hs-d {
+  display: inline-block;
+  margin-right: 12px;
+}
+
+.hs-d .icon {
+  width: 14px;
+  height: 14px;
+  margin-right: 1px;
+  vertical-align: -2px;
+}
+
 /* ---- シートとダイアログ ---- */
 
 dialog {
