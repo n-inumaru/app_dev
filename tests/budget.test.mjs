@@ -14,6 +14,7 @@ import {
   periodOf,
   savingsOf,
   shiftPeriod,
+  syncSnapshotSpent,
   todayGuide,
   usesCount,
   whatIf,
@@ -508,6 +509,58 @@ test('日付の端（1900年・2200年）でも、期間の計算が止まらな
   assert.deepEqual([lo.start, lo.end], ['1899-12-25', '1900-01-24']);
   const hi = periodOf(S(), '2200-12-31'); // 次の期間は、2201年にはみ出す
   assert.ok(hi.start <= '2200-12-31' && hi.end >= '2200-12-31' && hi.end.startsWith('2201-'));
+});
+
+test('確定した期間の出費を直すと、使った額と余りだけが作り直される（収入・固定費・自由に使える額は確定のまま）', () => {
+  const { data } = scenario();
+  for (const s of pendingSnapshots(data, '2027-02-10', NOW)) data.budget.snapshots[s.start] = s; // P1・P2 を確定
+  assert.deepEqual(syncSnapshotSpent(data), []); // 出費がなければ何も変わらない
+  const a = spend({ date: '2026-12-01', amount: 3000 });
+  const b = spend({ date: '2026-12-25', amount: 500 }); // P2 の初日
+  const open = spend({ date: '2027-02-01', amount: 999 }); // 今の期間（未確定）は対象外
+  data.budget.spends.push(a, b, open);
+  const [s1, s2, ...rest] = syncSnapshotSpent(data);
+  assert.equal(rest.length, 0);
+  assert.deepEqual([s1.start, s1.spent, s1.leftover], ['2026-11-25', 3000, 625000 - 3000]);
+  assert.deepEqual([s2.start, s2.spent, s2.leftover], ['2026-12-25', 500, 132500 - 500]);
+  for (const [s, before] of [[s1, data.budget.snapshots['2026-11-25']], [s2, data.budget.snapshots['2026-12-25']]]) {
+    assert.deepEqual([s.income, s.fixed, s.savings, s.extra, s.free, s.closedAt], [before.income, before.fixed, before.savings, before.extra, before.free, before.closedAt]);
+  }
+  assert.equal(data.budget.snapshots['2026-11-25'].spent, 0); // data は書き換えない
+  for (const s of [s1, s2]) data.budget.snapshots[s.start] = s;
+  assert.deepEqual(syncSnapshotSpent(data), []); // 保存したあとは、もう変わらない
+
+  a.date = '2026-12-24'; // 期間の最終日に日付を変える → P1 のまま
+  a.amount = 4000;
+  b.date = '2026-12-24'; // P2 から P1 へ移す → 2つの期間が両方変わる
+  const moved = syncSnapshotSpent(data);
+  assert.deepEqual(moved.map((s) => [s.start, s.spent, s.leftover]), [['2026-11-25', 4500, 625000 - 4500], ['2026-12-25', 0, 132500]]);
+  data.budget.spends.length = 0; // 全部消す → 0 に戻る
+  for (const s of moved) data.budget.snapshots[s.start] = s;
+  assert.deepEqual(syncSnapshotSpent(data).map((s) => [s.start, s.spent, s.leftover]), [['2026-11-25', 0, 625000]]);
+});
+
+test('出費の同期：確定した期間がなければ空。期間の外の出費は、どの期間にも入れない。大量でも速い', () => {
+  const { data } = scenario();
+  data.budget.spends.push(spend({ date: '2026-12-01', amount: 1 }));
+  assert.deepEqual(syncSnapshotSpent(data), []); // 確定した期間がまだない
+  data.budget.spends.length = 0;
+  const snap = makeSnapshot(data, P1, NOW); // 出費なしで確定
+  data.budget.snapshots[P1.key] = snap;
+  data.budget.spends.push(spend({ date: '2026-11-24', amount: 7 }), spend({ date: '2026-12-25', amount: 9 })); // P1 の前日と翌日
+  assert.deepEqual(syncSnapshotSpent(data), []);
+  deepFreeze(data);
+  syncSnapshotSpent(data); // 書き換え禁止でも動く
+  const big = scenario().data;
+  for (let i = 0, p = P1; i < 600; i += 1, p = shiftPeriod(S(), p, -1)) {
+    big.budget.snapshots[p.key] = { ...snap, start: p.start, end: p.end, spent: 0, leftover: snap.free };
+  }
+  for (let i = 0; i < 20000; i += 1) big.budget.spends.push(spend({ date: addDays('2026-11-25', -(i % 3000)), amount: 1 }));
+  const t0 = performance.now();
+  const out = syncSnapshotSpent(big);
+  const ms = performance.now() - t0;
+  assert.ok(out.length > 0, '出費のある期間が更新される');
+  assert.ok(ms < 500, `600期間×出費20000件の同期に ${Math.round(ms)}ms かかった`);
 });
 
 // ---------------- 4.5 「もしも」 ----------------

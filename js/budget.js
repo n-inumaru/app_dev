@@ -346,6 +346,36 @@ export function pendingSnapshots(data, today, now = new Date().toISOString()) {
   return out.reverse();
 }
 
+/**
+ * 確定した期間の「使った額」「余り」を、今の出費に合わせて作り直す。
+ * 確定したあとも、出費はあとから直せる（追加・編集・削除・日付の変更）。そのとき、
+ * 収入・固定費・貯金・上乗せ・自由に使える額は確定のまま、spent と leftover（＝free − spent）だけ更新する。
+ * 変わったスナップショットだけを、新しいオブジェクトで返す（data は書き換えない）。
+ * 保存するには、戻り値を data.budget.snapshots[s.start] = s で入れる。出費を変えるたびと、起動時に呼ぶ。
+ */
+export function syncSnapshotSpent(data) {
+  const snaps = Object.values(data.budget.snapshots).sort((a, b) => (a.start < b.start ? -1 : a.start > b.start ? 1 : 0));
+  if (snaps.length === 0) return [];
+  const sums = new Map(snaps.map((s) => [s.start, 0]));
+  for (const sp of data.budget.spends) {
+    // 出費の日付を含む確定済みの期間を、開始日の二分探索で探す
+    let lo = 0;
+    let hi = snaps.length - 1;
+    let found = -1;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      if (snaps[mid].start <= sp.date) {
+        found = mid;
+        lo = mid + 1;
+      } else {
+        hi = mid - 1;
+      }
+    }
+    if (found >= 0 && sp.date <= snaps[found].end) sums.set(snaps[found].start, sums.get(snaps[found].start) + toYen(sp.amount));
+  }
+  return snaps.filter((s) => s.spent !== sums.get(s.start)).map((s) => ({ ...s, spent: sums.get(s.start), leftover: s.free - sums.get(s.start) }));
+}
+
 // ---- 4.5 「もしも」 ----
 
 /**
