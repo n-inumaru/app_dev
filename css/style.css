@@ -1506,6 +1506,10 @@ details[open] > summary::before {
   font-size: 13px;
 }
 
+.set-list strong {
+  color: var(--ink);
+}
+
 .version {
   margin-top: 8px;
   color: var(--muted);

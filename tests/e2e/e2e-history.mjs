@@ -3,7 +3,7 @@
 // 「今日」は 2026-11-26（木）の10時に固定する。保存データを localStorage に直接入れて、画面から操作する。
 // 数字は、テスト側で手計算した答えと照らし合わせる（アプリの計算関数は使わない）。
 import { chromium } from 'playwright-core';
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { startServer, PREFIX } from './serve.mjs';
@@ -624,7 +624,149 @@ async function payOffA(p) {
   await c.context.close();
 }
 
-// >>> 追記する工程：2. もしも ／ 4. バックアップ ／ 5. 仕上げ <<<
+// =====================================================================
+// 4. バックアップ（書き出し → すべて消す → 読み込み → 家計が戻る）と、設定の「家計の計算について」
+// =====================================================================
+
+/** 家計がひととおり入ったデータ：給料日1日・貯金10%・変わる収入1件・この期間だけの家賃の上書き・借入1社・上乗せ 5,000円・履歴14期間・出費16件 */
+function backupData() {
+  const d = historyData();
+  d.debts = [debtOf('d-a', 'テストA社', 100000, 15, 10000)];
+  d.plan = { lumpSum: 0, monthlyExtra: 5000 };
+  d.budget.settings.savings = { mode: 'percent', value: 10 };
+  d.budget.entries = [{ id: 'e-1', date: '2026-11-05', amount: 30000, memo: 'テスト副業', createdAt: T0 }];
+  d.budget.overrides = { '2026-11-01': { income: {}, fixed: { 'fix-1': 65000 }, uses: {} } };
+  return d;
+}
+const canon = (v) => JSON.stringify(v, (k, val) => (val && typeof val === 'object' && !Array.isArray(val) ? Object.fromEntries(Object.entries(val).sort(([a], [b]) => (a < b ? -1 : 1))) : val));
+const settingsOpen = (p) => p.waitForSelector('#settings-root');
+
+step('設定：「家計の計算について」');
+{
+  const c = await newPage();
+  const p = c.page;
+  await openApp(p, backupData(), 'month', '#today-card');
+  await p.click('[data-action="open-settings"]');
+  await settingsOpen(p);
+  const t = flat(await text('#settings-budget-calc', p));
+  for (const word of ['期間', '自由に使える額', '今日あと', '余り', '履歴', '給料日 〜 次の給料日の前日', '次の期間には繰り越さず', '返済の記録は出費ではない']) {
+    ok(t.includes(word), `説明に「${word}」がある`);
+  }
+  await p.evaluate(() => document.querySelector('#settings-budget-calc').scrollIntoView());
+  ok(await noOverflow(p), '横にはみ出さない');
+  await shot('settings-budget-393', p, false);
+  await c.context.close();
+}
+
+step('バックアップ：書き出し → すべて消す → 読み込み → 家計が戻る');
+{
+  const c = await newPage();
+  const p = c.page;
+  await openApp(p, backupData(), 'month', '#today-card');
+  // 元の画面の数字：収入 25万＋変わる収入 3万 ＝ 28万、固定費 家賃（この期間だけ 6.5万）＋返済 1万 ＝ 7.5万、貯金 10% ＝ 2.8万、上乗せ 5,000円
+  // 自由に使える額 ＝ 280,000 − 75,000 − 28,000 − 5,000 ＝ 172,000円。使った額 9,500円 → 余り 162,500円
+  ok((await heroText(p)) === 172000 && (await statText(p, '使った額')) === '9,500円' && (await statText(p, '余り')) === '162,500円', '元の家計：自由に使える額 172,000円・使った額 9,500円・余り 162,500円');
+  const original = await stored(p);
+
+  // 書き出し
+  await p.click('[data-action="open-settings"]');
+  await settingsOpen(p);
+  const [dl] = await Promise.all([p.waitForEvent('download'), p.click('[data-action="export"]')]);
+  const file = join(OUT, 'backup-test.json');
+  await dl.saveAs(file);
+  ok(dl.suggestedFilename() === 'kanzai-navi-backup-20261126.json', `ファイル名：${dl.suggestedFilename()}`);
+  const raw = readFileSync(file, 'utf8');
+  const bk = JSON.parse(raw);
+  ok(bk.app === 'kanzai-navi' && bk.format === 2, `書き出したファイル：app と format 2（${bk.app}・format ${bk.format}）`);
+  ok(Object.keys(bk.data).sort().join(',') === 'budget,debts,plan,records', `入っているもの：${Object.keys(bk.data).sort().join('・')}（ロックの設定は入らない）`);
+  ok(bk.data.budget.incomes.length === 1 && bk.data.budget.fixed.length === 1 && bk.data.budget.entries.length === 1 && bk.data.budget.spends.length === 16 && Object.keys(bk.data.budget.snapshots).length === 14, '家計：収入1・固定費1・変わる収入1・出費16・履歴14期間');
+  ok(Object.keys(bk.data.budget.overrides).length === 1 && bk.data.budget.settings.savings.mode === 'percent', '家計：この期間だけの上書き・貯金の取り分も入っている');
+  ok(!/passcode|salt|credential|pbkdf2/i.test(raw), 'パスコード・パスキーの情報は入っていない');
+  await p.click('[data-action="close-sheet"]');
+  await sheetClosed(p);
+
+  // すべて消す
+  await p.click('[data-action="open-settings"]');
+  await settingsOpen(p);
+  await p.click('[data-action="wipe"]');
+  await p.waitForFunction(() => document.getElementById('modal').open);
+  ok((await text('#modal .modal-text', p)).includes('家計'), '確認の文に「家計」が入っている');
+  await answer(true, p);
+  const left = await p.evaluate(() => ({ data: localStorage.getItem('kanzai-navi:data'), keys: Object.keys(localStorage).filter((k) => k.startsWith('kanzai-navi:')) }));
+  ok(left.data === null && left.keys.length === 0, `消したあと、保存データは何も残らない（${left.keys.join(',') || '空'}）`);
+  await p.click('[data-tab="budget"]');
+  ok((await text('.empty h2', p)).includes('収入と固定費を入れましょう'), '家計は空に戻る（今月）');
+  await p.click('[data-action="b-sub"][data-key="history"]');
+  ok((await text('.empty h2', p)).includes('収入と固定費を入れましょう') && (await p.locator('#hist-list').count()) === 0, '履歴も空に戻る');
+
+  // 読み込み
+  await p.click('[data-action="open-settings"]');
+  await settingsOpen(p);
+  await p.setInputFiles('#import-file', file);
+  await p.waitForFunction(() => document.getElementById('modal').open);
+  const msg = flat(await text('#modal .modal-text', p));
+  ok(msg.includes('2026年11月26日に書き出したファイルです。'), '確認：書き出した日');
+  ok(msg.includes('会社 1社・記録 0件・家計（収入1件・固定費1件・変わる収入1件・出費16件）を読み込みます。'), `確認：読み込む家計の件数：${msg}`);
+  ok(msg.includes('今のデータ（会社 0社・記録 0件・家計（入っていません））は消えて、入れ替わります。'), '確認：今のデータ（空）');
+  await answer(true, p);
+  ok((await text('#toast', p)) === '読み込みました', 'トースト：読み込みました');
+  await p.click('[data-tab="budget"]');
+  await p.waitForSelector('#today-card, #hist-list, .empty');
+  await p.click('[data-action="b-sub"][data-key="month"]');
+  await p.waitForSelector('#today-card');
+  ok((await heroText(p)) === 172000 && (await statText(p, '使った額')) === '9,500円' && (await statText(p, '余り')) === '162,500円', '読み込んだあと：自由に使える額 172,000円・使った額 9,500円・余り 162,500円（元と同じ）');
+  const restored = await stored(p);
+  ok(canon(restored.budget) === canon(original.budget), '家計のデータが、元と完全に同じ（収入・固定費・変わる収入・上書き・出費・履歴・設定）');
+  ok(restored.plan.monthlyExtra === 5000 && restored.debts.length === 1 && restored.debts[0].name === 'テストA社', '借入・毎月の余剰金も戻る');
+  await p.click('[data-action="b-sub"][data-key="history"]');
+  await p.waitForSelector('#hist-list');
+  ok((await rows(p).count()) === 15 && (await p.locator('#hist-chart .hs-col').count()) === 12, '履歴も戻る：15行・棒12本');
+  ok(flat(await rowText(1, p)).includes('余り 70,000円'), '履歴の値も、そのまま（10月：余り 70,000円）');
+
+  // format 1（家計なし）のファイル
+  const old1 = join(OUT, 'backup-format1.json');
+  writeFileSync(old1, JSON.stringify({ app: 'kanzai-navi', format: 1, exportedAt: '2026-01-05T00:00:00.000Z', data: { debts: [debtOf('d-z', 'テスト旧形式社', 50000, 12, 5000)], records: [], plan: { lumpSum: 0, monthlyExtra: 0 } } }));
+  await p.click('[data-action="open-settings"]');
+  await settingsOpen(p);
+  await p.setInputFiles('#import-file', old1);
+  await p.waitForFunction(() => document.getElementById('modal').open);
+  const msg1 = flat(await text('#modal .modal-text', p));
+  ok(msg1.includes('会社 1社・記録 0件を読み込みます。'), `format 1 のファイル：「会社 1社・記録 0件を読み込みます」と言い、家計の件数は出さない：${msg1}`);
+  ok(msg1.includes('古い形式で、家計のデータが入っていません。読み込むと、今の家計は空になります。'), '今の家計があるので、「家計は空になる」と警告する');
+  await shot('import-format1-393', p, false);
+  await answer(false, p); // やめる
+  ok(canon((await stored(p)).budget) === canon(original.budget), 'やめたら、何も変わらない');
+  await p.setInputFiles('#import-file', old1);
+  await p.waitForFunction(() => document.getElementById('modal').open);
+  await answer(true, p);
+  const s1 = await stored(p);
+  ok(s1.debts.length === 1 && s1.debts[0].name === 'テスト旧形式社' && s1.budget.incomes.length === 0 && s1.budget.spends.length === 0 && Object.keys(s1.budget.snapshots).length === 0, '読み込むと、借入は入れ替わり、家計は空（初期値）になる');
+  await p.click('[data-tab="budget"]');
+  ok((await text('.empty h2', p)).includes('収入と固定費を入れましょう'), '家計の画面も空の案内');
+
+  // 壊れたファイル・別のアプリ・新しすぎる形式
+  const before = canon((await stored(p)).debts);
+  for (const [name, body, expect] of [
+    ['broken', 'これはバックアップではありません', 'ファイルを読み取れませんでした'],
+    ['other', JSON.stringify({ app: 'other', data: {} }), '完済ナビのバックアップファイルではありません'],
+    ['newer', JSON.stringify({ app: 'kanzai-navi', format: 3, data: {} }), '新しいバージョンで作られたファイルです'],
+  ]) {
+    const f = join(OUT, `backup-${name}.json`);
+    writeFileSync(f, body);
+    await p.click('[data-action="open-settings"]');
+    await settingsOpen(p);
+    await p.setInputFiles('#import-file', f);
+    await p.waitForFunction(() => document.getElementById('modal').open);
+    ok((await text('#modal .modal-title', p)) === '読み込めませんでした' && (await text('#modal .modal-text', p)).includes(expect), `${name}：「読み込めませんでした」＋${expect}`);
+    await answer(true, p);
+    await p.click('[data-action="close-sheet"]').catch(() => {});
+    await p.waitForTimeout(100);
+  }
+  ok(canon((await stored(p)).debts) === before, '読み込めなかったときは、今のデータは何も変わらない');
+  await c.context.close();
+}
+
+// >>> 追記する工程：2. もしも ／ 5. 仕上げ <<<
 
 console.log('\n---- コンソールのエラー・警告 ----');
 console.log(problems.length ? problems.join('\n') : '（なし）');
