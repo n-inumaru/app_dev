@@ -1,7 +1,7 @@
 // サービスワーカー：アプリのファイルをスマホに保存して、電波がなくても開けるようにする。
 // ファイルを変えたら VERSION を上げること（上げないと、スマホに古いファイルが残る）。
 
-const VERSION = '1.2.0';
+const VERSION = '1.2.1';
 const CACHE = `kanzai-navi-${VERSION}`;
 const ASSETS = [
   './',

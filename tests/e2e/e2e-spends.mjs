@@ -52,6 +52,19 @@ const ok = (cond, msg) => {
   console.log(`  ✓ ${msg}`);
 };
 const noOverflow = (p) => p.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth);
+/**
+ * スマホのキーボードを真似る：見える範囲（visualViewport）の高さだけを小さくする（Android の Chrome と同じ。画面の高さは変わらない）。
+ * height＝キーボードを除いた見える高さ。null なら元に戻す。本物のキーボードは出せないので、仕組みだけを確かめる
+ */
+async function fakeKeyboard(p, height) {
+  await p.evaluate((h) => {
+    const vv = window.visualViewport;
+    if (h === null) delete vv.height;
+    else Object.defineProperty(vv, 'height', { configurable: true, get: () => h });
+    vv.dispatchEvent(new Event('resize'));
+  }, height);
+  await p.waitForTimeout(120);
+}
 /** 「−46,697円」「3,803円」→ 数字（マイナスは U+2212 の「−」） */
 const yenNum = (s) => {
   const v = Number(s.replace(/[^\d]/g, ''));
@@ -220,7 +233,57 @@ step('出費を記録：金額（全角数字）・日付（初期は今日）�
 await page.click('[data-action="b-spend-add"]');
 await sheetOpen();
 ok((await page.inputValue('#sp-date')) === '2026-11-26', '日付の初期値は今日（11/26）');
-ok((await page.locator('#sp-amount').evaluate((el) => el === document.activeElement)), '金額の欄にカーソルが入っている');
+const focused = (sel) => page.locator(sel).evaluate((el) => el === document.activeElement);
+ok(!(await focused('#sp-amount')), '開いただけでは、金額の欄にカーソルは入らない（数字キーボードが勝手に出ない）');
+ok((await page.getAttribute('#sp-amount', 'enterkeyhint')) === 'done' && (await page.getAttribute('#sp-memo', 'enterkeyhint')) === 'done', 'キーボードの Enter のキーは「完了」（enterkeyhint=done）');
+// Enter では記録しない：キーボードを閉じるだけ（日付やカテゴリを選んでから「記録する」を押す）
+const spendCount = async () => (await stored()).budget.spends.length;
+ok((await spendCount()) === 7, '記録前は出費7件');
+await page.fill('#sp-amount', '5万');
+await page.press('#sp-amount', 'Enter');
+ok(await page.evaluate(() => document.getElementById('sheet').open), '金額で Enter：シートは開いたまま（記録されない）');
+ok((await spendCount()) === 7, '金額で Enter：保存されていない');
+ok(!(await focused('#sp-amount')), '金額で Enter：カーソルが外れる（キーボードが閉じる）');
+ok((await page.inputValue('#sp-amount')) === '50,000', '金額で Enter：「5万」が 50,000 に直る');
+await page.fill('#sp-memo', 'テストEnter');
+await page.press('#sp-memo', 'Enter');
+ok((await page.evaluate(() => document.getElementById('sheet').open)) && (await spendCount()) === 7 && !(await focused('#sp-memo')), 'メモで Enter：記録されず、キーボードだけ閉じる');
+{
+  // 日本語の変換中の Enter（文字の確定）には、手を出さない
+  const r = await page.evaluate(() => {
+    const el = document.getElementById('sp-memo');
+    el.focus();
+    const ev = new KeyboardEvent('keydown', { key: 'Enter', isComposing: true, bubbles: true, cancelable: true });
+    el.dispatchEvent(ev);
+    return { prevented: ev.defaultPrevented, focused: document.activeElement === el };
+  });
+  ok(!r.prevented && r.focused, '変換中の Enter は、そのまま通す（カーソルも外れない）');
+}
+await page.fill('#sp-amount', '');
+await page.fill('#sp-memo', '');
+
+step('キーボードが出たら、シートが上に持ち上がる（見える高さを小さくして、キーボードを真似る）');
+await fakeKeyboard(page, 540); // 画面の高さ852のうち、下の312pxがキーボード
+await page.waitForFunction(() => getComputedStyle(document.documentElement).getPropertyValue('--kb') === '312px');
+{
+  const r = await page.evaluate(() => {
+    const sheet = document.getElementById('sheet').getBoundingClientRect();
+    const inner = document.querySelector('.sheet-inner');
+    return { top: sheet.top, bottom: sheet.bottom, scrolls: inner.scrollHeight > inner.clientHeight };
+  });
+  ok(Math.abs(r.bottom - 540) <= 1 && r.top >= 0, `シートの下端が、キーボードの上（540px）にある：${Math.round(r.top)}〜${Math.round(r.bottom)}px`);
+  ok(r.scrolls, 'シートの中は、スクロールして全部の欄に届く');
+  await page.locator('#b-spend-form button[type="submit"]').scrollIntoViewIfNeeded();
+  const b = await page.evaluate(() => document.querySelector('#b-spend-form button[type="submit"]').getBoundingClientRect().bottom);
+  ok(b <= 541, `スクロールすると、「記録する」もキーボードの上に出る（下端 ${Math.round(b)}px）`);
+  await shot('w393-light-spend-sheet-keyboard', page, false);
+}
+await fakeKeyboard(page, 792); // アドレスバーの出入り程度（60px）は、キーボードとは見なさない
+ok((await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--kb'))) === '0px', '60pxの差は、キーボードとは見なさない');
+await fakeKeyboard(page, null); // キーボードが閉じる
+ok(Math.abs((await page.evaluate(() => document.getElementById('sheet').getBoundingClientRect().bottom)) - 852) <= 1, 'キーボードが閉じると、シートは元の位置（画面の下）に戻る');
+
+step('出費を記録：入力ミスのチェック・カテゴリ・「続けて入力」');
 await page.click('#b-spend-form button[type="submit"]');
 ok((await text('#sp-amount-err')).includes('金額を入れてください'), '金額が空だと、エラー');
 await page.fill('#sp-amount', 'あいう');
@@ -243,7 +306,7 @@ ok((await page.inputValue('#sp-amount')) === '' && (await page.inputValue('#sp-m
 ok((await page.inputValue('#sp-date')) === '2026-11-26', '日付はそのまま');
 ok((await page.locator('[data-spend-cats] [aria-pressed="true"]').count()) === 0, 'カテゴリは選んでいない状態に戻る');
 ok((await text('#sp-status')).includes('200円 を記録しました'), `メッセージ：${await text('#sp-status')}`);
-ok(await page.locator('#sp-amount').evaluate((el) => el === document.activeElement), '金額の欄にカーソルが戻る（続けて入れられる）');
+ok(!(await focused('#sp-amount')), '続けて入力でも、キーボードは勝手に出ない（金額の欄を押すと出る）');
 ok((await page.locator('#sp-amount-err').innerText()) === '', 'エラーは出ていない');
 await shot('w393-light-spend-sheet-continued', page, false);
 await page.fill('#sp-amount', '300');
@@ -427,6 +490,17 @@ async function review(label, opts, width, data) {
   await p.fill('#sp-memo', 'テストの長いメモ：これは長い文字を入れたときに、画面からはみ出さないかを見るための文です');
   ok(await noOverflow(p), `${label}：入力のシートも横にはみ出さない`);
   await shot(`${label}-spend-sheet`, p, false);
+  // キーボード（下の320px）が出たとき：シートがその上に収まり、中をスクロールして「記録する」まで届く
+  await fakeKeyboard(p, 480);
+  const lift = await p.evaluate(() => {
+    const r = document.getElementById('sheet').getBoundingClientRect();
+    return { top: r.top, bottom: r.bottom };
+  });
+  await p.locator('#b-spend-form button[type="submit"]').scrollIntoViewIfNeeded();
+  const submitBottom = await p.evaluate(() => document.querySelector('#b-spend-form button[type="submit"]').getBoundingClientRect().bottom);
+  ok(Math.abs(lift.bottom - 480) <= 1 && lift.top >= 0 && submitBottom <= 481, `${label}：キーボードが出ても、シートはその上（480px）に収まり、「記録する」まで届く（シート ${Math.round(lift.top)}〜${Math.round(lift.bottom)}px）`);
+  await shot(`${label}-spend-sheet-keyboard`, p, false);
+  await fakeKeyboard(p, null);
   await p.click('[data-action="b-spend-continue"]');
   await shot(`${label}-spend-sheet-continued`, p, false);
   await p.click('[data-action="close-sheet"]');

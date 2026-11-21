@@ -188,7 +188,7 @@ export function createSpendsView({ getData, currentPeriod, commit, rerender, kit
     openSheet(`
     ${sheetHead(s ? '出費を編集' : '出費を記録')}
     <form id="b-spend-form" class="bform" novalidate data-id="${esc(id || '')}" data-category="${esc(s?.category ?? '')}">
-      ${yenField('sp-amount', '金額', s ? num(s.amount) : '', s ? '' : 'autofocus')}
+      ${yenField('sp-amount', '金額', s ? num(s.amount) : '')}
       <label class="field">
         <span class="field-label">日付</span>
         <input class="input input-text" type="date" id="sp-date" value="${esc(s?.date ?? todayISO())}">
@@ -205,6 +205,16 @@ export function createSpendsView({ getData, currentPeriod, commit, rerender, kit
       <p class="hint">「続けて入力」は、記録したあとも、この画面を閉じません。日付はそのままで、金額とメモだけ空になります。</p>`
       }
     </form>`);
+    // 開いたときに、キーボードを勝手に出さない（金額の欄を押したときに出る）。
+    // キーボードの Enter は、記録せずにキーボードを閉じるだけ（日付やカテゴリを選んでから、「記録する」を押す）。
+    // 日本語の変換中の Enter（文字の確定）は、そのまま通す。
+    const form = $('#b-spend-form');
+    for (const id of ['sp-amount', 'sp-memo']) $(`#${id}`).setAttribute('enterkeyhint', 'done');
+    form.addEventListener('keydown', (e) => {
+      if (e.key !== 'Enter' || e.isComposing || e.target.tagName !== 'INPUT') return;
+      e.preventDefault();
+      e.target.blur();
+    });
   }
 
   function readSpendForm(form) {
@@ -242,7 +252,6 @@ export function createSpendsView({ getData, currentPeriod, commit, rerender, kit
     form.dataset.submitted = '';
     refreshForm(form);
     $('#sp-status').textContent = `${yen(v.amount)} を記録しました${note}。続けて入れられます。`;
-    $('#sp-amount').focus();
   }
 
   async function deleteSpend(id) {

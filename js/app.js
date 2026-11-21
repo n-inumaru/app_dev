@@ -50,7 +50,7 @@ import {
   setError,
 } from './ui.js';
 
-const APP_VERSION = '1.2.0';
+const APP_VERSION = '1.2.1';
 const RELOCK_AFTER_MS = 60 * 1000; // アプリから離れて1分でロック
 const TITLES = { home: '完済ナビ', plan: '返し方の提案', forecast: '完済の予測', records: '返済の記録', budget: '家計' };
 

@@ -16,6 +16,31 @@ export function setupDialogs() {
   sheet.addEventListener('close', () => {
     if (!sheet.open) sheet.innerHTML = '';
   });
+  trackKeyboard();
+}
+
+/**
+ * 画面のキーボードの高さを、CSS の変数 --kb（px）に入れる。シートは、この高さだけ持ち上がる（style.css の .sheet）。
+ * Android の Chrome は、キーボードが出ても「画面の高さ」は変わらず、見える範囲（visualViewport）だけが小さくなる。
+ * そのため、画面の下にあるシートの下半分が、キーボードの裏に隠れてしまう。
+ * 画面の高さも一緒に縮む環境では、差が0になるので、二重に持ち上げることはない。
+ */
+function trackKeyboard() {
+  const vv = window.visualViewport;
+  if (!vv) return;
+  let frame = 0;
+  const update = () => {
+    frame = 0;
+    // ピンチで拡大しているときは、見える範囲が小さいだけなので、キーボードとは見なさない
+    const raw = vv.scale > 1.01 ? 0 : document.documentElement.clientHeight - vv.height - vv.offsetTop;
+    const kb = raw > 100 ? Math.round(raw) : 0; // 100px 以下の差（アドレスバーの出入りなど）は、キーボードではない
+    document.documentElement.style.setProperty('--kb', `${kb}px`);
+  };
+  const schedule = () => {
+    if (!frame) frame = requestAnimationFrame(update);
+  };
+  vv.addEventListener('resize', schedule);
+  vv.addEventListener('scroll', schedule);
 }
 
 // ---- シート ----
