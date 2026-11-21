@@ -35,6 +35,8 @@ import * as lock from './lock.js';
 import { drawBalanceChart } from './chart.js';
 import { icon } from './icons.js';
 import { createBudgetView } from './budget-view.js';
+import { extraGuide, isBudgetEmpty } from './budget.js';
+import { parseISO } from './dates.js';
 import {
   setupDialogs,
   openSheet,
@@ -306,6 +308,7 @@ function viewPlan() {
     ${yenField('plan-lump', '今ある余剰金（一括で返す額）', s.lumpSum ? num(s.lumpSum) : '', 'placeholder="0"')}
     ${yenField('plan-extra', '毎月の余剰金（毎月上乗せできる額）', s.monthlyExtra ? num(s.monthlyExtra) : '', 'placeholder="0"')}
     <p class="note">${icon('info')}<span id="plan-total"></span></p>
+    <div id="plan-guide" aria-live="polite"></div>
   </section>
   <div id="plan-result"></div>`;
 }
@@ -315,7 +318,35 @@ function renderPlanResult() {
   if (!box) return;
   const p = plan();
   $('#plan-total').innerHTML = `毎月の返済の総額 <strong>${yen(p.monthlyTotal)}</strong> を変えずに続け、完済した会社に払っていた額は次の会社に回す前提で計算します。`;
+  $('#plan-guide').innerHTML = planGuideHtml();
   box.innerHTML = planResultHtml(p);
+}
+
+const mdText = (iso) => {
+  const p = parseISO(iso);
+  return `${p.m}月${p.d}日`;
+};
+
+/**
+ * 家計の「自由に使える額（返済への上乗せの前。今の期間）」を目安として出し、毎月の余剰金がそれを超えたら注意する（設計書 7）。
+ * 計算は budget.js の extraGuide。家計に何も入れていないときは出さない。責める言葉は使わない。
+ */
+function planGuideHtml() {
+  const g = extraGuide(data, todayISO());
+  if (!g) return '';
+  const range = `${mdText(g.period.start)}〜${mdText(g.period.end)}`;
+  const link = '<button type="button" class="link-btn" data-goto="budget">家計を見る</button>';
+  const money = (v) => `${v < 0 ? '−' : ''}${yen(Math.abs(v))}`;
+  if (g.over) {
+    const text = g.negative
+      ? `家計では、返済への上乗せの前でも、今の期間（${range}）の自由に使える額が <strong>${money(g.free)}</strong> です。毎月の余剰金 ${yen(g.extra)} を続けられるか、家計の収支と合わせて確かめてみてください。`
+      : `毎月の余剰金 ${yen(g.extra)} は、家計の目安（<strong>${yen(g.free)}</strong>）を ${yen(g.overBy)} 超えています。無理なく続けられるか、家計の収支と合わせて確かめてみてください。`;
+    return `<p class="warn" id="plan-guide-text">${icon('alert')}<span>${text} ${link}</span></p>`;
+  }
+  const text = g.negative
+    ? `家計の自由に使える額は、返済への上乗せの前で <strong>${money(g.free)}</strong>（今の期間 ${range}）です。上乗せを考える前に、家計の収支を見直せるか確かめてみましょう。`
+    : `家計の目安：今の期間（${range}）の自由に使える額は、返済への上乗せの前で <strong>${yen(g.free)}</strong> です。毎月の余剰金は、この範囲に収めると無理がありません（ボーナスや年払いの月は、期間ごとに変わります）。`;
+  return `<p class="note" id="plan-guide-text">${icon('wallet')}<span>${text} ${link}</span></p>`;
 }
 
 function planResultHtml(p) {
@@ -1064,23 +1095,39 @@ async function recordLump() {
 /** 完済したときのお祝いと、浮いたお金の使い道の確認 */
 async function celebrate(ids) {
   const stillActive = activeDebts().length > 0;
+  const withBudget = !isBudgetEmpty(data.budget); // 家計を使っているときだけ、家計の話をする
   if (!stillActive) {
-    await alertDialog({ title: 'すべての会社を完済しました！', message: 'おつかれさまでした。記録はこのまま残ります。', okLabel: 'やった！' });
+    await alertDialog({
+      title: 'すべての会社を完済しました！',
+      message: `おつかれさまでした。記録はこのまま残ります。${withBudget ? '\n家計の「自由に使える額」は、返済と返済への上乗せがなくなったぶん、増えます。' : ''}`,
+      okLabel: 'やった！',
+    });
     return;
   }
   for (const id of ids) {
     const d = debtById(id);
     if (!d) continue;
+    // 2つの選び方の意味を、はっきり書く（ボタンは「余剰金に足す」「自由に使う」）
     const ok = await confirmDialog({
       title: `${d.name} を完済しました！`,
-      message: `おめでとうございます。\n${d.name} に毎月払っていた ${yen(d.payment)} を「毎月の余剰金」に足して、ほかの会社の返済に回しますか？\n（あとから提案の画面で変えられます）`,
+      message: [
+        'おめでとうございます。',
+        `${d.name} に毎月払っていた ${yen(d.payment)} が、浮きます。使い道を選んでください。`,
+        '',
+        `・余剰金に足す：「毎月の余剰金」に ${yen(d.payment)} を足して、ほかの会社の返済に回します。完済が早まります。`,
+        `・自由に使う（足さない）：返済には回さず、自由に使えるお金にします。${withBudget ? `家計の「自由に使える額」が、${yen(d.payment)} 増えます。` : ''}`,
+        '',
+        '（あとから提案の画面で変えられます）',
+      ].join('\n'),
       okLabel: '余剰金に足す',
-      cancelLabel: '足さない',
+      cancelLabel: '自由に使う',
     });
     if (ok) {
       data.plan.monthlyExtra += d.payment;
       persist();
       toast(`毎月の余剰金を ${yen(data.plan.monthlyExtra)} にしました`);
+    } else {
+      toast('足さずに、自由に使えるお金にしました');
     }
   }
   render();

@@ -427,7 +427,204 @@ step('履歴：確定した期間が600件でも、1秒以内に出る');
   await c.context.close();
 }
 
-// >>> 追記する工程：2. もしも ／ 3. 完済ナビとの連携 ／ 4. バックアップ ／ 5. 仕上げ <<<
+// =====================================================================
+// 3. 完済ナビとの連携
+// =====================================================================
+
+const debtOf = (id, name, balance, rate, payment) => ({ id, name, balance, rate, payment, startBalance: balance, createdAt: T0, updatedAt: T0 });
+/**
+ * 借入2社（A社 残高10万・年利15%・毎月1万円、B社 残高20万・年利18%・毎月1.2万円）＋毎月の余剰金 5,000円。給料日1日（11/1〜11/30）
+ * 収入25万 − 固定費（家賃7万＋返済 1万＋1.2万＝9.2万）＝ 上乗せの前の自由に使える額 158,000円、上乗せ 5,000円を引いて 153,000円
+ * 出費：11/10 に 8,000円、11/26 に 1,500円 ＝ 使った額 9,500円 → 余り 143,500円
+ */
+function linkData(opts = {}) {
+  const d = baseData({ since: '2026-11-01' });
+  d.debts = [debtOf('d-a', 'テストA社', 100000, 15, 10000), debtOf('d-b', 'テストB社', 200000, 18, 12000)];
+  if (opts.single) d.debts.pop();
+  d.plan = { lumpSum: 0, monthlyExtra: 5000 };
+  d.budget.spends = [sp('k-1', '2026-11-10', 8000, 'daily', 'テスト日用品'), sp('k-2', '2026-11-26', 1500, 'food', 'テスト昼食')];
+  if (opts.noBudget) d.budget = emptyBudgetData().budget;
+  return d;
+}
+const heroText = (p) => text('.hero-value', p).then((s) => yenNum(s));
+const statText = async (p, label) => (await p.locator('.today-card .stat').filter({ has: p.locator('.stat-label', { hasText: new RegExp(`^${label}$`) }) }).locator('.stat-value').innerText()).replace(/\s/g, '');
+
+step('提案画面：家計の「自由に使える額（返済への上乗せの前）」を目安に出す。毎月の余剰金が超えたら注意する');
+{
+  const c = await newPage();
+  const p = c.page;
+  await openApp(p, linkData(), 'month', '#today-card');
+  await p.click('[data-tab="plan"]');
+  await p.waitForSelector('#plan-guide-text');
+  let g = flat(await text('#plan-guide-text', p));
+  ok(g.includes('158,000円') && g.includes('11月1日〜11月30日') && g.includes('返済への上乗せの前'), `目安：158,000円（今の期間 11月1日〜11月30日）：${g}`);
+  ok((await p.locator('#plan-guide-text.warn').count()) === 0 && (await p.locator('#plan-guide-text.note').count()) === 1, '毎月の余剰金 5,000円は目安以内：注意は出ない');
+  ok((await p.locator('#plan-guide-text [data-goto="budget"]').count()) === 1, '「家計を見る」の入口がある');
+  await p.fill('#plan-extra', '158000');
+  await p.waitForTimeout(100);
+  ok((await p.locator('#plan-guide-text.warn').count()) === 0, '余剰金が目安と同じ額（158,000円）なら、超えていない');
+  await p.fill('#plan-extra', '200000');
+  await p.waitForTimeout(100);
+  g = flat(await text('#plan-guide-text', p));
+  ok((await p.locator('#plan-guide-text.warn').count()) === 1, '余剰金 200,000円は目安を超える：注意（赤）が出る');
+  ok(g.includes('200,000円') && g.includes('158,000円') && g.includes('42,000円 超えています') && g.includes('確かめてみてください'), `超えた額と、責めない言葉：${g}`);
+  ok((await p.locator('#plan-guide-text.warn svg').count()) === 2 || (await p.locator('#plan-guide-text.warn > svg').count()) === 1, '赤だけでなく、警告アイコンがつく');
+  ok(!g.includes('いけません') && !g.includes('ダメ') && !g.includes('使いすぎ'), '責める言葉を使っていない');
+  const s = await stored(p);
+  ok(s.plan.monthlyExtra === 200000, '入力はそのまま保存される（毎月の余剰金 200,000円）');
+  await shot('plan-guide-over-393', p, false);
+  await p.fill('#plan-extra', '1万');
+  await p.waitForTimeout(100);
+  ok((await p.locator('#plan-guide-text.warn').count()) === 0, '余剰金を 10,000円に戻すと、注意は消える');
+  ok(await noOverflow(p), '横にはみ出さない');
+  await c.context.close();
+}
+{
+  // 上乗せの前でもマイナス（収入10万・家賃15万・返済 2.2万 → −72,000円）
+  const c = await newPage();
+  const d = linkData();
+  d.budget.incomes[0].amount = 100000;
+  d.budget.fixed[0].amount = 150000;
+  await openApp(c.page, d, 'month', '#today-card');
+  await c.page.click('[data-tab="plan"]');
+  await c.page.waitForSelector('#plan-guide-text');
+  const g = flat(await text('#plan-guide-text', c.page));
+  ok((await c.page.locator('#plan-guide-text.warn').count()) === 1 && g.includes('−72,000円') && g.includes('5,000円'), `目安がマイナス＋余剰金あり：注意が出る：${g}`);
+  await shot('plan-guide-negative-360', c.page, false);
+  await c.context.close();
+}
+{
+  // 家計に何も入れていないときは、目安を出さない
+  const c = await newPage();
+  await openApp(c.page, linkData({ noBudget: true }), 'month', '.empty');
+  await c.page.click('[data-tab="plan"]');
+  await c.page.waitForSelector('#plan-guide', { state: 'attached' });
+  ok((await c.page.locator('#plan-guide-text').count()) === 0 && (await text('#plan-guide', c.page)) === '', '家計に何も入れていない：目安は出ない');
+  await c.page.fill('#plan-extra', '300000');
+  await c.page.waitForTimeout(100);
+  ok((await c.page.locator('#plan-guide-text').count()) === 0, '余剰金をどれだけ入れても、注意は出ない');
+  await c.context.close();
+}
+{
+  // 出費だけ入れていて、収入・固定費がないとき：目安は出す（収入0・返済だけ → マイナス）
+  const c = await newPage();
+  const d = linkData();
+  d.budget.incomes = [];
+  d.budget.fixed = [];
+  await openApp(c.page, d, 'month', '#today-card');
+  await c.page.click('[data-tab="plan"]');
+  await c.page.waitForSelector('#plan-guide-text');
+  ok(flat(await text('#plan-guide-text', c.page)).includes('−22,000円'), `出費だけの家計：目安は 収入0 − 返済 22,000円 ＝ −22,000円：${flat(await text('#plan-guide-text', c.page))}`);
+  await c.context.close();
+}
+
+step('返済の記録は出費ではない：記録しても、家計の使った額・余りは変わらない');
+{
+  const c = await newPage();
+  const p = c.page;
+  await openApp(p, linkData(), 'month', '#today-card');
+  ok((await statText(p, '使った額')) === '9,500円' && (await statText(p, '余り')) === '143,500円', '記録の前：使った額 9,500円・余り 143,500円');
+  ok((await heroText(p)) === 153000, '記録の前：自由に使える額 153,000円');
+  const before = await stored(p);
+  await p.click('[data-tab="home"]');
+  await p.click('.debt:has-text("テストA社") [data-action="add-record"]');
+  await p.waitForSelector('#record-form');
+  await p.fill('#r-amount', '30000'); // 毎月の返済より多く払う
+  await p.click('#record-form button[type="submit"]');
+  await sheetClosed(p);
+  await p.click('[data-tab="records"]');
+  ok((await p.locator('.rec').count()) === 1, '返済の記録が1件できた（記録タブ）');
+  await p.click('[data-tab="budget"]');
+  await p.waitForSelector('#today-card');
+  ok((await statText(p, '使った額')) === '9,500円' && (await statText(p, '余り')) === '143,500円', '記録のあと：使った額 9,500円・余り 143,500円のまま');
+  ok((await heroText(p)) === 153000, '記録のあとも：自由に使える額 153,000円のまま（返済額は変わらないので）');
+  const after = await stored(p);
+  ok(after.budget.spends.length === before.budget.spends.length && after.records.length === 1, `家計の出費は増えない（${after.budget.spends.length}件）。返済の記録だけが1件増える`);
+  ok(JSON.stringify(after.budget.snapshots) === JSON.stringify(before.budget.snapshots), '履歴（確定した期間）も変わらない');
+  await p.click('[data-action="b-sub"][data-key="history"]');
+  await p.waitForSelector('#hist-list');
+  ok(flat(await rowText(0, p)).includes('使った額 9,500円'), '履歴の画面の「今の期間」も、使った額 9,500円のまま');
+  await c.context.close();
+}
+
+step('完済のお祝い：「余剰金に足す」と「自由に使う（足さない）」の意味がわかる文言');
+async function payOffA(p) {
+  await p.click('[data-tab="home"]');
+  await p.click('.debt:has-text("テストA社") [data-action="add-record"]');
+  await p.waitForSelector('#record-form');
+  await p.click('[data-rtype="extra"]');
+  const balance = Number((await p.locator('#r-debt option:checked').innerText()).match(/残高 ([\d,]+)円/)[1].replace(/,/g, ''));
+  await p.fill('#r-amount', String(balance));
+  await p.click('#record-form button[type="submit"]');
+  await p.waitForFunction(() => document.getElementById('modal').open);
+}
+{
+  const c = await newPage();
+  const p = c.page;
+  await openApp(p, linkData(), 'month', '#today-card');
+  await payOffA(p);
+  const title = await text('#modal .modal-title', p);
+  const msg = await text('#modal .modal-text', p);
+  ok(title.includes('テストA社 を完済しました'), `タイトル：${title}`);
+  ok(msg.includes('毎月払っていた 10,000円 が、浮きます'), '浮くお金（毎月の返済額）を言っている');
+  ok(msg.includes('・余剰金に足す：「毎月の余剰金」に 10,000円 を足して、ほかの会社の返済に回します'), '「余剰金に足す」の意味');
+  ok(msg.includes('・自由に使う（足さない）：返済には回さず、自由に使えるお金にします。家計の「自由に使える額」が、10,000円 増えます'), '「自由に使う（足さない）」の意味と、家計への影響');
+  const labels = (await p.locator('#modal .modal-actions .btn').allInnerTexts()).map((s) => s.trim());
+  ok(labels.join('/') === '自由に使う/余剰金に足す', `ボタン：${labels.join(' / ')}`);
+  const btnH = await p.locator('#modal .modal-actions .btn').evaluateAll((els) => Math.min(...els.map((e) => e.getBoundingClientRect().height)));
+  ok(btnH >= 44, `ボタンの高さ ${btnH}px（44px以上）`);
+  await shot('celebrate-393', p, false);
+  await answer(false, p); // 自由に使う
+  ok((await text('#toast', p)) === '足さずに、自由に使えるお金にしました', `トースト：${await text('#toast', p)}`);
+  const s = await stored(p);
+  ok(s.plan.monthlyExtra === 5000, '「自由に使う」：毎月の余剰金は 5,000円のまま');
+  await p.click('[data-tab="budget"]');
+  await p.waitForSelector('#today-card');
+  // 固定費 7万＋B社 1.2万＝8.2万 → 25万 − 8.2万 − 上乗せ 5,000 ＝ 163,000円（A社の 10,000円が自由に使えるお金になった）
+  ok((await heroText(p)) === 163000, '家計の自由に使える額：153,000円 → 163,000円（A社の分 10,000円が増えた）');
+  await c.context.close();
+}
+{
+  const c = await newPage();
+  const p = c.page;
+  await openApp(p, linkData(), 'month', '#today-card');
+  await payOffA(p);
+  await answer(true, p); // 余剰金に足す
+  ok((await text('#toast', p)) === '毎月の余剰金を 15,000円 にしました', `トースト：${await text('#toast', p)}`);
+  const s = await stored(p);
+  ok(s.plan.monthlyExtra === 15000, '「余剰金に足す」：毎月の余剰金 5,000円 → 15,000円');
+  await p.click('[data-tab="budget"]');
+  await p.waitForSelector('#today-card');
+  ok((await heroText(p)) === 153000, '家計の自由に使える額は 153,000円のまま（返済から外れたぶんを、上乗せに回したので）');
+  await c.context.close();
+}
+{
+  // 家計に何も入れていないときは、家計の話をしない
+  const c = await newPage();
+  const p = c.page;
+  await openApp(p, linkData({ noBudget: true }), 'month', '.empty');
+  await payOffA(p);
+  const msg = await text('#modal .modal-text', p);
+  ok(msg.includes('・余剰金に足す：') && msg.includes('・自由に使う（足さない）：返済には回さず、自由に使えるお金にします。') && !msg.includes('家計'), `家計が空なら、家計の話はしない：${flat(msg)}`);
+  await c.context.close();
+}
+{
+  // 全部完済したとき
+  const c = await newPage();
+  const p = c.page;
+  await openApp(p, linkData({ single: true }), 'month', '#today-card');
+  await payOffA(p);
+  const msg = await text('#modal .modal-text', p);
+  ok((await text('#modal .modal-title', p)).includes('すべての会社を完済しました') && msg.includes('家計の「自由に使える額」は、返済と返済への上乗せがなくなったぶん、増えます'), `全部完済：家計の一言つき：${flat(msg)}`);
+  await answer(true, p);
+  await p.click('[data-tab="budget"]');
+  await p.waitForSelector('#today-card');
+  // 収入25万 − 家賃7万 ＝ 18万円。返済も上乗せもなくなった
+  ok((await heroText(p)) === 180000, '全部完済したあとの自由に使える額：180,000円');
+  await c.context.close();
+}
+
+// >>> 追記する工程：2. もしも ／ 4. バックアップ ／ 5. 仕上げ <<<
 
 console.log('\n---- コンソールのエラー・警告 ----');
 console.log(problems.length ? problems.join('\n') : '（なし）');
