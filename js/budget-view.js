@@ -26,6 +26,7 @@ import { icon } from './icons.js';
 import { closeSheet, confirmDialog, openSheet, setError, sheetHead, toast, yenField } from './ui.js';
 import { createSpendsView } from './budget-spends.js';
 import { createHistoryView } from './budget-history.js';
+import { createWhatIfView } from './budget-whatif.js';
 
 const SUBS = [
   ['month', '今月'],
@@ -116,6 +117,20 @@ function readYen(id, { min = 0, required = true, label = '金額', max = BUDGET_
   return { value: v };
 }
 
+/**
+ * 入力シートの Enter のキー：保存せずに、キーボードを閉じるだけにする（Android の Chrome で、Enter を押すたびに保存されるのを防ぐ）。
+ * 保存は「保存する」ボタンだけ。日本語の変換中の Enter（文字の確定）は、そのまま通す。入力欄の Enter のキーは「完了」の表示にする。
+ * 出費のシートと同じ動き（フェーズ3の「14」の12）。スイッチ（チェックボックス）の Enter は、今までどおり。
+ */
+function calmEnter(form) {
+  for (const input of $$('input.input', form)) input.setAttribute('enterkeyhint', 'done');
+  form.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter' || e.isComposing || e.target.tagName !== 'INPUT' || e.target.type === 'checkbox') return;
+    e.preventDefault();
+    e.target.blur();
+  });
+}
+
 const segValue = (form, name) => $(`[data-seg="${name}"] [aria-pressed="true"]`, form)?.dataset.v;
 const chipValues = (form, name) => $$(`[data-chips="${name}"] [aria-pressed="true"]`, form).map((b) => Number(b.dataset.v));
 
@@ -204,7 +219,7 @@ export function createBudgetView({ getData, persist, rerender }) {
     if (state.sub === 'month') return subs + monthHtml();
     if (state.sub === 'items') return subs + itemsHtml();
     if (state.sub === 'history') return subs + historyView.html();
-    return subs + comingSoonHtml(state.sub);
+    return subs + whatifView.html();
   }
 
   function periodNav(period) {
@@ -226,20 +241,6 @@ export function createBudgetView({ getData, persist, rerender }) {
     ${o !== 0 ? '<div class="pnav-now"><button type="button" class="link-btn" data-action="b-now">今の期間に戻る</button></div>' : ''}`;
   }
 
-  function comingSoonHtml(sub) {
-    const history = sub === 'history';
-    return `
-    <section class="card empty">
-      <div class="empty-icon">${icon(history ? 'chart' : 'bulb')}</div>
-      <h2>${history ? '履歴' : 'もしも'}は準備中です</h2>
-      <p>${
-        history
-          ? '期間ごとの「使えた額・使った額・余り」を、あとから見返せるようにします。期間が終わると、結果は自動で記録されます。'
-          : '「固定費が減ったら」「返済への上乗せを増やしたら」を、実際のデータを変えずに試せるようにします。'
-      }</p>
-    </section>`;
-  }
-
   // ---- 今月 ----
 
   function emptyGuideHtml() {
@@ -249,6 +250,8 @@ export function createBudgetView({ getData, persist, rerender }) {
       <h2>収入と固定費を入れましょう</h2>
       <p>毎月の収入と、家賃・通信費などの固定費を入れると、毎月自由に使える額がわかります。返済中の会社の返済額は、固定費に自動で入ります。</p>
       <button type="button" class="btn btn-primary btn-block" data-action="b-sub" data-key="items">${icon('plus')}収支を入れる</button>
+      <button type="button" class="btn btn-block mt-12" data-action="b-spend-add">${icon('edit')}出費だけ記録する</button>
+      <p class="hint">収入や固定費を入れずに、出費だけ記録することもできます。あとから収入を入れると、自由に使える額や「今日あと」がわかるようになります。</p>
       <p class="hint">データはこのスマホの中だけに保存され、外部には送られません。</p>
     </section>`;
   }
@@ -285,6 +288,12 @@ export function createBudgetView({ getData, persist, rerender }) {
       <div class="hero-label">自由に使える額</div>
       <div class="hero-value ${negative ? 'is-neg' : ''}">${negative ? icon('alert') : ''}${money(a.free)}<span class="unit">円</span></div>
       <p class="summary-foot">この期間の収入 <strong>${yen(a.income)}</strong> から、固定費・貯金の取り分・返済への上乗せを引いた額です。</p>
+      ${
+        // 出費だけを記録している人（収入を1つも入れていない）への一言
+        !data.budget.incomes.length && !data.budget.entries.length
+          ? `<p class="note">${icon('info')}<span>収入を入れていないので、自由に使える額は <span class="nobr">0円</span> です。収入と固定費を入れると、自由に使える額と「今日あと」がわかります。<button type="button" class="link-btn" data-action="b-sub" data-key="items">収支を入れる</button></span></p>`
+          : ''
+      }
     </section>`;
 
     // 「今日あと」と「＋ 出費を記録」は毎日使うので、自由に使える額のすぐ下に置く（設計書「14」の1）
@@ -393,11 +402,19 @@ export function createBudgetView({ getData, persist, rerender }) {
     currentPeriod,
     commit,
     rerender,
-    kit: { textField, readYen, md, money, moneyYen, brow, shares, pctText, nowISO, refreshForm },
+    kit: { textField, readYen, md, money, moneyYen, brow, shares, pctText, nowISO, refreshForm, calmEnter },
   });
 
   // 履歴の画面（期間ごとの結果・前の期間との比べ・最近12期間の棒グラフ）。ファイルは js/budget-history.js
   const historyView = createHistoryView({ getData, rerender, kit: { md, moneyYen, emptyGuideHtml } });
+
+  // 「もしも」の画面（変更を重ねて、自由に使える額と返済の変化を試す。実データは変えない）。ファイルは js/budget-whatif.js
+  const whatifView = createWhatIfView({
+    getData,
+    currentPeriod,
+    rerender,
+    kit: { textField, segField, readYen, md, refreshForm, calmEnter, periodNav, emptyGuideHtml },
+  });
 
   function itemsHtml() {
     const data = getData();
@@ -588,6 +605,7 @@ export function createBudgetView({ getData, persist, rerender }) {
     'b-fixed-form': { read: readFixedForm, submit: submitFixed, ids: ['bx-name', 'bx-amount', 'bx-days', 'bx-count', 'bx-ov'], preview: updateFixedPreview },
     'b-savings-form': { read: readSavingsForm, submit: submitSavings, ids: ['bs-value'], preview: updateSavingsPreview },
     'b-spend-form': spends.form,
+    ...whatifView.forms,
   };
 
   function refreshForm(form) {
@@ -681,6 +699,7 @@ export function createBudgetView({ getData, persist, rerender }) {
       ${it ? deleteButton('b-income-delete', it.id) : ''}
     </form>`);
     refreshForm($('#b-income-form'));
+    calmEnter($('#b-income-form'));
   }
 
   function readIncomeForm(form) {
@@ -758,6 +777,7 @@ export function createBudgetView({ getData, persist, rerender }) {
       <button type="submit" class="btn btn-primary btn-block">${e ? '保存する' : '記録する'}</button>
       ${e ? deleteButton('b-entry-delete', e.id) : ''}
     </form>`);
+    calmEnter($('#b-entry-form'));
   }
 
   function readEntryForm() {
@@ -864,6 +884,7 @@ export function createBudgetView({ getData, persist, rerender }) {
       ${it ? deleteButton('b-fixed-delete', it.id) : ''}
     </form>`);
     refreshForm($('#b-fixed-form'));
+    calmEnter($('#b-fixed-form'));
   }
 
   function readFixedForm(form) {
@@ -976,6 +997,7 @@ export function createBudgetView({ getData, persist, rerender }) {
       <button type="submit" class="btn btn-primary btn-block">保存する</button>
     </form>`);
     refreshForm($('#b-savings-form'));
+    calmEnter($('#b-savings-form'));
   }
 
   function readSavingsForm(form) {
@@ -1103,7 +1125,7 @@ export function createBudgetView({ getData, persist, rerender }) {
         return true;
       }
       default:
-        return spends.onAction(btn) || historyView.onAction(btn);
+        return spends.onAction(btn) || historyView.onAction(btn) || whatifView.onAction(btn);
     }
   }
 

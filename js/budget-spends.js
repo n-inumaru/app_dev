@@ -27,7 +27,7 @@ const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
  * @param {object} deps.kit   budget-view.js と共有する表示の部品
  */
 export function createSpendsView({ getData, currentPeriod, commit, rerender, kit }) {
-  const { textField, readYen, md, money, moneyYen, brow, shares, pctText, nowISO, refreshForm } = kit;
+  const { textField, readYen, md, money, moneyYen, brow, shares, pctText, nowISO, refreshForm, calmEnter } = kit;
 
   // 「もっと見る」で増やした件数（見ている期間ごと。期間を変えたら100件に戻る）
   let more = { key: '', limit: PAGE };
@@ -206,15 +206,9 @@ export function createSpendsView({ getData, currentPeriod, commit, rerender, kit
       }
     </form>`);
     // 開いたときに、キーボードを勝手に出さない（金額の欄を押したときに出る）。
-    // キーボードの Enter は、記録せずにキーボードを閉じるだけ（日付やカテゴリを選んでから、「記録する」を押す）。
-    // 日本語の変換中の Enter（文字の確定）は、そのまま通す。
-    const form = $('#b-spend-form');
-    for (const id of ['sp-amount', 'sp-memo']) $(`#${id}`).setAttribute('enterkeyhint', 'done');
-    form.addEventListener('keydown', (e) => {
-      if (e.key !== 'Enter' || e.isComposing || e.target.tagName !== 'INPUT') return;
-      e.preventDefault();
-      e.target.blur();
-    });
+    // キーボードの Enter は、記録せずにキーボードを閉じるだけ（日付やカテゴリを選んでから、「記録する」を押す。
+    // 日本語の変換中の Enter は、そのまま通す）。ほかの入力シートも同じ動きで、budget-view.js の calmEnter が行う。
+    calmEnter($('#b-spend-form'));
   }
 
   function readSpendForm(form) {

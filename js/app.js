@@ -52,7 +52,7 @@ import {
   setError,
 } from './ui.js';
 
-const APP_VERSION = '1.2.1';
+const APP_VERSION = '1.3.0';
 const RELOCK_AFTER_MS = 60 * 1000; // アプリから離れて1分でロック
 const TITLES = { home: '完済ナビ', plan: '返し方の提案', forecast: '完済の予測', records: '返済の記録', budget: '家計' };
 
@@ -336,16 +336,17 @@ function planGuideHtml() {
   if (!g) return '';
   const range = `${mdText(g.period.start)}〜${mdText(g.period.end)}`;
   const link = '<button type="button" class="link-btn" data-goto="budget">家計を見る</button>';
-  const money = (v) => `${v < 0 ? '−' : ''}${yen(Math.abs(v))}`;
+  // 数字と「円」の間で折り返さない
+  const money = (v) => `<span class="nobr">${v < 0 ? '−' : ''}${yen(Math.abs(v))}</span>`;
   if (g.over) {
     const text = g.negative
-      ? `家計では、返済への上乗せの前でも、今の期間（${range}）の自由に使える額が <strong>${money(g.free)}</strong> です。毎月の余剰金 ${yen(g.extra)} を続けられるか、家計の収支と合わせて確かめてみてください。`
-      : `毎月の余剰金 ${yen(g.extra)} は、家計の目安（<strong>${yen(g.free)}</strong>）を ${yen(g.overBy)} 超えています。無理なく続けられるか、家計の収支と合わせて確かめてみてください。`;
+      ? `家計では、返済への上乗せの前でも、今の期間（${range}）の自由に使える額が <strong>${money(g.free)}</strong> です。毎月の余剰金 ${money(g.extra)} を続けられるか、家計の収支と合わせて確かめてみてください。`
+      : `毎月の余剰金 ${money(g.extra)} は、家計の目安（<strong>${money(g.free)}</strong>）を ${money(g.overBy)} 超えています。無理なく続けられるか、家計の収支と合わせて確かめてみてください。`;
     return `<p class="warn" id="plan-guide-text">${icon('alert')}<span>${text} ${link}</span></p>`;
   }
   const text = g.negative
     ? `家計の自由に使える額は、返済への上乗せの前で <strong>${money(g.free)}</strong>（今の期間 ${range}）です。上乗せを考える前に、家計の収支を見直せるか確かめてみましょう。`
-    : `家計の目安：今の期間（${range}）の自由に使える額は、返済への上乗せの前で <strong>${yen(g.free)}</strong> です。毎月の余剰金は、この範囲に収めると無理がありません（ボーナスや年払いの月は、期間ごとに変わります）。`;
+    : `家計の目安：今の期間（${range}）の自由に使える額は、返済への上乗せの前で <strong>${money(g.free)}</strong> です。毎月の余剰金は、この範囲に収めると無理がありません（ボーナスや年払いの月は、期間ごとに変わります）。`;
   return `<p class="note" id="plan-guide-text">${icon('wallet')}<span>${text} ${link}</span></p>`;
 }
 

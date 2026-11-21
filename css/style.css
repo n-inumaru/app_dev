@@ -139,6 +139,10 @@ p {
   margin-bottom: 8px;
 }
 
+.nobr {
+  white-space: nowrap; /* 数字と「円」の間で折り返さない */
+}
+
 .good-text {
   color: var(--good-ink);
   font-weight: 700;
@@ -707,6 +711,7 @@ body.covered dialog {
 }
 
 .link-btn {
+  position: relative;
   padding: 2px;
   border: 0;
   background: none;
@@ -714,6 +719,13 @@ body.covered dialog {
   font-weight: 700;
   text-decoration: underline;
   text-underline-offset: 3px;
+}
+
+/* 文章の途中の小さなリンクも、押せる範囲は広げる（見た目の行の高さは変えない） */
+.link-btn::after {
+  content: "";
+  position: absolute;
+  inset: -14px -6px;
 }
 
 /* ---- 入力 ---- */
@@ -1042,6 +1054,9 @@ table {
 }
 
 details > summary {
+  display: flex;
+  align-items: center;
+  min-height: 44px; /* タップの大きさ */
   padding: 4px 0;
   color: var(--accent-ink);
   font-weight: 700;
@@ -1582,6 +1597,7 @@ details[open] > summary::before {
 }
 
 .sbar-block {
+  position: relative;
   display: flex;
   flex-shrink: 1;
   align-items: center;
@@ -1592,6 +1608,13 @@ details[open] > summary::before {
   color: #fff;
   font-size: 13px;
   font-weight: 700;
+}
+
+/* 棒は28pxだが、押せる範囲は上下に広げて44pxにする。額は凡例と「表で見る」にもある */
+.sbar-block::after {
+  content: "";
+  position: absolute;
+  inset: -8px 0;
 }
 
 .sbar-block:active {
@@ -2339,6 +2362,144 @@ details[open] > summary::before {
   height: 14px;
   margin-right: 1px;
   vertical-align: -2px;
+}
+
+/* ---- もしも（js/budget-whatif.js） ---- */
+
+.wi-intro {
+  margin: 0 0 12px;
+}
+
+.wi-row {
+  padding: 10px 0 12px;
+  border-top: 1px solid var(--grid);
+}
+
+.card-title + .wi-row {
+  padding-top: 4px;
+  border-top: 0;
+}
+
+.wi-label {
+  color: var(--ink-2);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+/* 増減の数字は大きく。＋／−・矢印・言葉で伝える（緑は「増える」の補助だけ） */
+.wi-delta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 2px 0;
+  font-size: clamp(30px, 9.5vw, 40px);
+  font-weight: 700;
+  line-height: 1.2;
+  letter-spacing: -0.01em;
+  overflow-wrap: anywhere;
+}
+
+.wi-delta-sm {
+  font-size: clamp(22px, 7vw, 28px);
+}
+
+.wi-delta .icon {
+  width: 0.7em;
+  height: 0.7em;
+}
+
+.wi-delta.is-up {
+  color: var(--good-ink);
+}
+
+.wi-word {
+  color: var(--ink-2);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.wi-ba {
+  margin-top: 4px;
+  padding-top: 10px;
+  border-top: 1px solid var(--grid);
+  color: var(--ink-2);
+  font-size: 14px;
+  line-height: 1.7;
+}
+
+.wi-ba strong {
+  color: var(--ink);
+}
+
+.wi-plan {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+}
+
+.wi-plan > div {
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: var(--surface-2);
+}
+
+.wi-plan dt {
+  color: var(--ink-2);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.wi-plan dd {
+  margin: 2px 0 0;
+  font-size: 15px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.wi-diff {
+  display: block;
+  margin-top: 2px;
+  color: var(--ink-2);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.wi-diff .icon {
+  width: 14px;
+  height: 14px;
+  margin-right: 2px;
+  vertical-align: -2px;
+}
+
+.wi-list {
+  margin: 0 0 4px;
+  padding: 0;
+  list-style: none;
+}
+
+.wi-change {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 0;
+  border-top: 1px solid var(--grid);
+}
+
+.wi-list > .wi-change:first-child {
+  border-top: 0;
+}
+
+.wi-change-text {
+  min-width: 0;
+  font-size: 14px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.wi-add {
+  display: grid;
+  gap: 8px;
 }
 
 /* ---- シートとダイアログ ---- */

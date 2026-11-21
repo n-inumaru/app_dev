@@ -766,7 +766,544 @@ step('バックアップ：書き出し → すべて消す → 読み込み →
   await c.context.close();
 }
 
-// >>> 追記する工程：2. もしも ／ 5. 仕上げ <<<
+// =====================================================================
+// 5. 仕上げ：空の状態・出費だけ記録・Enter・長い名前・アクセシビリティ
+// =====================================================================
+
+/**
+ * 画面にあるボタンなどを調べる：名前（読み上げ用）がないもの、タップの大きさが 44px 未満のもの。
+ * 例外：文章の途中にある小さなリンク（.link-btn）は、行の高さに収まる文字なので数えない（押す範囲は広げてある）。
+ * 棒グラフの棒（.hs-col）・積み上げ棒の部分（.sbar-block）は、幅が値に比例して狭い（上下の押せる範囲は44px）。値は、凡例・表・44pxの「ひとつ前／後」ボタンでも読める。スイッチ（.switch）は、行全体（.switch-row）で数える。
+ */
+async function tapAudit(p) {
+  return p.evaluate(() => {
+    const out = { unnamed: [], small: [] };
+    const visible = (e) => {
+      const r = e.getBoundingClientRect();
+      const s = getComputedStyle(e);
+      return r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && !e.closest('[hidden]') && !e.disabled;
+    };
+    const label = (e) => (e.getAttribute('aria-label') || e.innerText || '').trim() || (e.labels && e.labels[0] ? e.labels[0].innerText.trim() : '') || e.getAttribute('placeholder') || '';
+    for (const e of document.querySelectorAll('button, summary, select, input:not([type=hidden]), a[href]')) {
+      if (!visible(e)) continue;
+      const modal = document.querySelector('dialog[open]');
+      if (modal && !modal.contains(e)) continue; // 開いているシート・ダイアログの外は、見えない扱い
+      const id = `${e.tagName.toLowerCase()}${e.className ? `.${String(e.className).trim().split(/\s+/).join('.')}` : ''}${e.dataset.action ? `[${e.dataset.action}]` : ''}`;
+      if (!label(e)) out.unnamed.push(id);
+      if (e.classList.contains('link-btn') || e.classList.contains('hs-col') || e.classList.contains('sbar-block')) continue;
+      const box = e.classList.contains('switch') ? e.closest('.switch-row') : e;
+      const r = box.getBoundingClientRect();
+      if (r.width < 44 || r.height < 44) out.small.push(`${id} ${Math.round(r.width)}×${Math.round(r.height)}`);
+    }
+    return out;
+  });
+}
+async function auditOk(p, label) {
+  const a = await tapAudit(p);
+  ok(a.unnamed.length === 0, `${label}：すべてのボタン・入力欄に名前がある${a.unnamed.length ? `（なし：${[...new Set(a.unnamed)].join(', ')}）` : ''}`);
+  ok(a.small.length === 0, `${label}：タップの大きさがすべて44px以上${a.small.length ? `（小さい：${[...new Set(a.small)].join(', ')}）` : ''}`);
+}
+
+const LONG_JA = 'あいうえおかきくけこさしすせそたちつてとなにぬねのはひふへほ'; // 30字
+const LONG_EN = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcd'; // 30字（途中で折り返せない）
+const LONG_MEMO = 'メモ長い文章'.repeat(16).slice(0, 100) + ''; // 100字
+function longNameData() {
+  const d = historyData();
+  d.budget.incomes = [
+    { id: 'inc-1', name: LONG_JA, kind: 'monthly', amount: 250000, months: [], day: 1, enabled: true, createdAt: T0, updatedAt: T0 },
+    { id: 'inc-2', name: LONG_EN, kind: 'months', amount: 100000, months: [6, 12], day: 10, enabled: true, createdAt: T0, updatedAt: T0 },
+  ];
+  d.budget.fixed = [
+    { id: 'fix-1', name: LONG_EN, category: 'housing', kind: 'monthly', amount: 70000, every: 12, dueMonth: 1, dueDay: 1, mode: 'lump', uses: { by: 'weekdays', days: [1, 2, 3, 4, 5], skipHolidays: true, count: 0 }, enabled: true, createdAt: T0, updatedAt: T0 },
+    { id: 'fix-2', name: LONG_JA, category: 'food', kind: 'uses', amount: 500, every: 12, dueMonth: 1, dueDay: 1, mode: 'lump', uses: { by: 'weekdays', days: [1, 2, 3, 4, 5], skipHolidays: true, count: 0 }, enabled: true, createdAt: T0, updatedAt: T0 },
+  ];
+  d.budget.entries = [{ id: 'e-1', date: '2026-11-05', amount: 30000, memo: LONG_MEMO, createdAt: T0 }];
+  d.budget.spends.push(sp('long-1', '2026-11-20', 1234567, 'food', LONG_MEMO), sp('long-2', '2026-11-21', 100, '', LONG_EN));
+  d.debts = [debtOf('d-a', LONG_EN, 100000, 15, 10000)];
+  return d;
+}
+
+step('空の状態：「出費だけ記録する」の入口（収入・固定費を入れずに、出費だけ記録する）');
+for (const [label, opts, width] of [['w393-light', {}, 393], ['w360-dark', { colorScheme: 'dark' }, 360]]) {
+  const c = await newPage({ viewport: { width, height: 800 }, ...opts });
+  const p = c.page;
+  await openApp(p, emptyBudgetData(), 'month', '.empty');
+  const btns = (await p.locator('.empty .btn').allInnerTexts()).map((s) => s.trim());
+  ok(btns.join('/') === '収支を入れる/出費だけ記録する', `${label}：案内のボタン：${btns.join(' / ')}`);
+  ok(flat(await text('.empty .hint', p)).includes('収入や固定費を入れずに、出費だけ記録することもできます'), `${label}：一言ヒント`);
+  ok(await noOverflow(p), `${label}：横にはみ出さない`);
+  await auditOk(p, `${label}：空の案内`);
+  await shot(`empty-guide-${label}`, p, false);
+  await p.click('.empty [data-action="b-spend-add"]');
+  await sheetOpen(p);
+  ok((await p.locator('#b-spend-form').count()) === 1, `${label}：出費の記録シートが開く`);
+  await p.fill('#sp-amount', '1200');
+  await p.fill('#sp-memo', 'テストの出費');
+  await p.click('#b-spend-form button[type="submit"]');
+  await sheetClosed(p);
+  const s = await stored(p);
+  ok(s.budget.spends.length === 1 && s.budget.spends[0].amount === 1200 && s.budget.settings.since === '2026-11-26', `${label}：出費が1件保存され、使い始めた日（since）が入る`);
+  await p.waitForSelector('#today-card');
+  ok((await heroText(p)) === 0 && (await statText(p, '使った額')) === '1,200円', `${label}：収入なしの今月：自由に使える額 0円・使った額 1,200円`);
+  ok(flat(await text('.summary .note', p)).includes('収入を入れていないので、自由に使える額は 0円 です'), `${label}：収入を入れていない人への一言：${flat(await text('.summary .note', p))}`);
+  ok(await noOverflow(p), `${label}：出費だけの今月も、横にはみ出さない`);
+  await shot(`spend-only-month-${label}`, p, false);
+  await p.click('.summary .note [data-action="b-sub"]');
+  ok((await p.getAttribute('.subtabs [data-key="items"]', 'aria-pressed')) === 'true', `${label}：「収支を入れる」で収支の画面へ`);
+  await c.context.close();
+}
+
+step('入力シートの Enter：保存せずに、キーボードを閉じるだけ（収入・固定費・入金・貯金。日本語の変換中は通す）');
+{
+  const c = await newPage();
+  const p = c.page;
+  await openApp(p, baseData(), 'items', '#b-totals');
+  const forms = [
+    ['収入', '[data-action="b-income-add"]', '#b-income-form', ['#bi-name', '#bi-amount']],
+    ['固定費', '[data-action="b-fixed-add"]', '#b-fixed-form', ['#bx-name', '#bx-amount']],
+    ['入金の記録', '[data-action="b-entry-add"]', '#b-entry-form', ['#be-amount', '#be-memo']],
+    ['貯金の取り分', '[data-action="b-savings-edit"]', '#b-savings-form', ['#bs-value']],
+  ];
+  for (const [name, openSel, formSel, inputs] of forms) {
+    const before = canon((await stored(p)).budget);
+    await p.click(openSel);
+    await sheetOpen(p);
+    for (const sel of inputs) {
+      ok((await p.getAttribute(sel, 'enterkeyhint')) === 'done', `${name}：${sel} の Enter のキーは「完了」（enterkeyhint=done）`);
+    }
+    const first = inputs[0];
+    await p.fill(first, first === '#bs-value' ? '5000' : first === '#be-amount' ? '1000' : 'テスト項目');
+    if (formSel === '#b-income-form' || formSel === '#b-fixed-form') await p.fill(inputs[1], '12345');
+    await p.focus(first);
+    // 日本語の変換中の Enter は止めない（文字の確定に使われる）
+    const composing = await p.evaluate((sel) => {
+      const ev = new KeyboardEvent('keydown', { key: 'Enter', isComposing: true, bubbles: true, cancelable: true });
+      document.querySelector(sel).dispatchEvent(ev);
+      return ev.defaultPrevented;
+    }, first);
+    ok(composing === false, `${name}：変換中の Enter は、そのまま通す`);
+    ok(await p.evaluate((sel) => document.activeElement === document.querySelector(sel), first), `${name}：変換中の Enter では、カーソルは外れない`);
+    await p.press(first, 'Enter');
+    ok(await p.evaluate(() => document.getElementById('sheet').open), `${name}：Enter を押しても、シートは開いたまま`);
+    ok(!(await p.evaluate((sel) => document.activeElement === document.querySelector(sel), first)), `${name}：Enter で、カーソルが外れる（キーボードが閉じる）`);
+    ok(canon((await stored(p)).budget) === before, `${name}：Enter では、保存されない`);
+    await p.click(`${formSel} button[type="submit"]`); // 保存は「保存する／追加する／記録する」ボタンだけ
+    await sheetClosed(p);
+    ok(canon((await stored(p)).budget) !== before, `${name}：ボタンを押すと、保存される`);
+  }
+  ok(flat(await text('#b-totals', p)).length > 0, '保存したあとも、収支の画面は壊れていない');
+  await c.context.close();
+}
+
+step('長い名前（30字・折り返せない英字・100字のメモ）：幅360でも、はみ出さず切れない');
+for (const [label, opts] of [['w360-light', {}], ['w360-dark', { colorScheme: 'dark' }]]) {
+  const c = await newPage({ viewport: { width: 360, height: 800 }, ...opts });
+  const p = c.page;
+  await openApp(p, longNameData(), 'month', '#today-card');
+  const check = async (what) => {
+    ok(await noOverflow(p), `${label}：${what}：横にはみ出さない`);
+    const clipped = await p.evaluate(() =>
+      [...document.querySelectorAll('.brow, .brow-name, .brow-main, .bl-list li, .bl-name, .day-head, .hbar-name, .stat, .hs-row, .hs-nums dd, .card')].filter((e) => e.scrollWidth > e.clientWidth + 1).map((e) => e.className),
+    );
+    ok(clipped.length === 0, `${label}：${what}：文字が切れていない${clipped.length ? `（${[...new Set(clipped)].join(',')}）` : ''}`);
+  };
+  await p.click('.breakdown summary');
+  await check('今月（内訳・出費の一覧）');
+  await shot(`long-month-${label}`, p, false);
+  await p.click('[data-action="b-sub"][data-key="items"]');
+  await check('収支');
+  await shot(`long-items-${label}`, p, false);
+  await p.click('[data-action="b-fixed-edit"][data-id="fix-1"]');
+  await sheetOpen(p);
+  ok(await noOverflow(p), `${label}：固定費の編集シートも、横にはみ出さない`);
+  await p.click('[data-action="close-sheet"]');
+  await sheetClosed(p);
+  await p.click('[data-action="b-sub"][data-key="history"]');
+  await check('履歴');
+  await c.context.close();
+}
+
+step('アクセシビリティ：ボタンの名前・タップの大きさ44px（今月・収支・履歴・シート・設定。幅360）');
+{
+  const c = await newPage({ viewport: { width: 360, height: 800 } });
+  const p = c.page;
+  await openApp(p, backupData(), 'month', '#today-card');
+  await auditOk(p, '今月');
+  await p.click('[data-action="b-sub"][data-key="items"]');
+  await auditOk(p, '収支');
+  await p.click('[data-action="b-sub"][data-key="history"]');
+  await p.waitForSelector('#hist-list');
+  await auditOk(p, '履歴');
+  await p.click('[data-action="b-sub"][data-key="month"]');
+  await p.click('[data-action="b-spend-add"]');
+  await sheetOpen(p);
+  await auditOk(p, '出費の記録シート');
+  await p.click('[data-action="close-sheet"]');
+  await sheetClosed(p);
+  await p.click('[data-action="b-sub"][data-key="items"]');
+  for (const [name, sel] of [['収入の編集シート', '[data-action="b-income-edit"]'], ['固定費の編集シート', '[data-action="b-fixed-edit"]'], ['貯金のシート', '[data-action="b-savings-edit"]'], ['給料日のシート', '[data-action="b-payday"]']]) {
+    await p.locator(sel).first().click();
+    await sheetOpen(p);
+    await auditOk(p, name);
+    await p.click('[data-action="close-sheet"]');
+    await sheetClosed(p);
+  }
+  await p.click('[data-tab="plan"]');
+  await p.waitForSelector('#plan-guide-text');
+  await auditOk(p, '提案（家計の目安つき）');
+  await p.click('[data-action="open-settings"]');
+  await settingsOpen(p);
+  await auditOk(p, '設定');
+  await c.context.close();
+}
+
+// =====================================================================
+// 2. もしも
+// =====================================================================
+
+/**
+ * 収入：給料25万（毎月）・ボーナス60万（6月・12月の10日）。固定費：家賃7万・保険12万（12月15日に年払い）・昼食（500円×平日、祝日を除く）・サブスク1,500円
+ * 借入2社（返済 1万＋1.2万）・毎月の上乗せ 5,000円。給料日1日。今日 11/26 → 期間 11/1〜11/30
+ * 11月の計算：収入 250,000／固定費 家賃 70,000＋昼食 500×19日（平日21日 − 祝日2日）＝9,500＋サブスク 1,500＋借入の返済 22,000 ＝ 103,000／上乗せ 5,000
+ *   ＝ 自由に使える額 250,000 − 103,000 − 5,000 ＝ 142,000円
+ * 12月の計算：収入 250,000＋ボーナス 600,000 ＝ 850,000／固定費 70,000＋昼食 500×23日＝11,500＋1,500＋保険 120,000＋22,000 ＝ 225,000／上乗せ 5,000 ＝ 620,000円
+ */
+function whatifData() {
+  const d = baseData({ since: '2026-11-01' });
+  d.budget.incomes.push({ id: 'inc-2', name: 'テストボーナス', kind: 'months', amount: 600000, months: [6, 12], day: 10, enabled: true, createdAt: T0, updatedAt: T0 });
+  const usesDef = { by: 'weekdays', days: [1, 2, 3, 4, 5], skipHolidays: true, count: 0 };
+  const fx = (id, name, category, kind, amount, extra = {}) => ({ id, name, category, kind, amount, every: 12, dueMonth: 1, dueDay: 1, mode: 'lump', uses: usesDef, enabled: true, createdAt: T0, updatedAt: T0, ...extra });
+  d.budget.fixed.push(fx('fix-2', 'テスト保険（年払い）', 'insurance', 'periodic', 120000, { dueMonth: 12, dueDay: 15 }), fx('fix-3', 'テスト昼食', 'food', 'uses', 500), fx('fix-4', 'テストサブスク', 'subscription', 'monthly', 1500));
+  d.debts = [debtOf('d-a', 'テストA社', 100000, 15, 10000), debtOf('d-b', 'テストB社', 200000, 18, 12000)];
+  d.plan = { lumpSum: 0, monthlyExtra: 5000 };
+  d.budget.spends = [];
+  return d;
+}
+const wiOpenWith = async (p, data) => openApp(p, data, 'whatif', '#wi-result');
+const wiText = (p, sel) => text(sel, p).then(flat);
+async function wiAdd(p, openSel, fill) {
+  await p.click(openSel);
+  await sheetOpen(p);
+  await fill();
+  await p.click('#sheet form button[type="submit"]');
+  await sheetClosed(p);
+}
+
+step('もしも：最初の画面（変更なし）');
+{
+  const c = await newPage();
+  const p = c.page;
+  await wiOpenWith(p, whatifData());
+  ok((await p.locator('.subtabs [aria-pressed="true"]').innerText()) === 'もしも', 'もしもの小タブが選ばれている');
+  ok((await wiText(p, '.wi-intro')).includes('実際のデータは変わりません。ここで試した変更は保存されず、アプリを閉じると消えます'), `説明：${await wiText(p, '.wi-intro')}`);
+  ok((await wiText(p, '#wi-result')).includes('下の「変更を足す」から'), '変更がないときの案内');
+  ok((await p.locator('#wi-period').count()) === 0, '変更がなければ、結果の数字は出さない');
+  ok((await wiText(p, '.pnav-range')) === '11月1日〜11月30日', '見ている期間：11月1日〜11月30日（期間の移動もできる）');
+  ok((await p.locator('.wi-add .btn').count()) === 4 && (await p.locator('.wi-add .btn:disabled').count()) === 0, '変更を足すボタンが4つ');
+  const names = (await p.locator('.wi-add .btn').allInnerTexts()).map((s) => s.trim());
+  ok(names.join('/') === '項目の金額を変える/項目をオフにする/仮の項目を足す/返済への上乗せを変える', `ボタン：${names.join(' / ')}`);
+  ok((await p.locator('button', { hasText: '反映' }).count()) === 0, '「実際に反映する」ボタンは作らない');
+  ok((await p.locator('#wi-changes [data-action="b-sub"][data-key="items"]').count()) === 1, '実際に変えたいときは「収支」へ（案内あり）');
+  await c.context.close();
+}
+
+step('もしも：変更を重ねる（金額・オフ・仮の項目）と、自由に使える額の変化（この期間・1年）');
+{
+  const c = await newPage();
+  const p = c.page;
+  const data = whatifData();
+  await wiOpenWith(p, data);
+  const original = canon((await stored(p)));
+  // 1. 家賃 70,000 → 60,000
+  await p.click('[data-action="b-wi-amount"]');
+  await sheetOpen(p);
+  const opts = (await p.locator('#wa-item option').allInnerTexts()).map((s) => s.trim());
+  ok(opts.join('/') === 'テスト給料/テストボーナス/テスト家賃/テスト保険（年払い）/テスト昼食/テストサブスク', `選べる項目（収入・固定費）：${opts.join(' / ')}`);
+  ok((await p.locator('#wa-item optgroup').evaluateAll((g) => g.map((e) => e.label))).join('/') === '収入/固定費', '項目は「収入」「固定費」に分けて並ぶ');
+  await p.selectOption('#wa-item', 'fixed:fix-1');
+  ok((await p.locator('.field:has(#wa-amount) .field-label').innerText()) === '新しい毎月の金額', 'ラベル：新しい毎月の金額');
+  ok((await wiText(p, '#wa-preview')) === '今の毎月の金額：70,000円', `今の金額：${await wiText(p, '#wa-preview')}`);
+  await p.selectOption('#wa-item', 'fixed:fix-3');
+  ok((await p.locator('.field:has(#wa-amount) .field-label').innerText()) === '新しい1回あたりの単価', '昼食（単価×回数）は「1回あたりの単価」');
+  await p.selectOption('#wa-item', 'income:inc-2');
+  ok((await wiText(p, '#wa-preview')) === '今の1回の支給額：600,000円', 'ボーナス（決まった月）は「1回の支給額」');
+  await p.selectOption('#wa-item', 'fixed:fix-1');
+  await p.fill('#wa-amount', '6万');
+  await p.click('#b-wi-amount-form button[type="submit"]');
+  await sheetClosed(p);
+  ok((await text('#toast', p)).includes('実際のデータは変わりません'), `トースト：${await text('#toast', p)}`);
+  ok((await wiText(p, '#wi-period')) === '+10,000円' && (await wiText(p, '#wi-year')) === '+120,000円', `家賃 7万 → 6万：この期間 ${await wiText(p, '#wi-period')}・1年 ${await wiText(p, '#wi-year')}（毎月の項目は12倍）`);
+  ok((await p.locator('#wi-period svg').count()) === 1 && (await p.locator('#wi-period.is-up').count()) === 1, '増えるときは、上向きの矢印と「＋」（色だけに頼らない）');
+  ok((await wiText(p, '#wi-result')).includes('増えます'), '言葉でも「増えます」');
+  ok((await wiText(p, '.wi-ba')).includes('142,000円 → 152,000円'), `自由に使える額：${await wiText(p, '.wi-ba')}`);
+  ok((await p.locator('.wi-change').count()) === 1 && (await wiText(p, '.wi-change-text')) === 'テスト家賃（固定費）の毎月の金額：70,000円 → 60,000円', `変更の一覧：${await wiText(p, '.wi-change-text')}`);
+  // 2. サブスクをオフ（＋1,500）
+  await wiAdd(p, '[data-action="b-wi-off"]', async () => {
+    await p.selectOption('#wo-item', 'fixed:fix-4');
+  });
+  ok((await wiText(p, '#wi-period')) === '+11,500円' && (await wiText(p, '#wi-year')) === '+138,000円', `サブスクもオフ：この期間 ${await wiText(p, '#wi-period')}・1年 ${await wiText(p, '#wi-year')}（120,000＋1,500×12）`);
+  // 3. 仮の固定費 習い事 8,000円（−8,000）
+  await wiAdd(p, '[data-action="b-wi-add"]', async () => {
+    await p.fill('#wd-name', 'テスト習い事');
+    await p.fill('#wd-amount', '8000');
+  });
+  ok((await wiText(p, '#wi-period')) === '+3,500円' && (await wiText(p, '#wi-year')) === '+42,000円', `仮の固定費 8,000円：この期間 ${await wiText(p, '#wi-period')}・1年 ${await wiText(p, '#wi-year')}`);
+  // 4. 仮の収入 副業 30,000円（＋30,000）
+  await wiAdd(p, '[data-action="b-wi-add"]', async () => {
+    await p.click('[data-action="b-seg"][data-v="income"]');
+    await p.fill('#wd-name', 'テスト副業');
+    await p.fill('#wd-amount', '3万');
+  });
+  ok((await wiText(p, '#wi-period')) === '+33,500円' && (await wiText(p, '#wi-year')) === '+402,000円', `仮の収入 30,000円：この期間 ${await wiText(p, '#wi-period')}・1年 ${await wiText(p, '#wi-year')}`);
+  ok((await wiText(p, '.wi-ba')).includes('142,000円 → 175,500円'), `自由に使える額：${await wiText(p, '.wi-ba')}`);
+  const items = (await p.locator('.wi-change-text').allInnerTexts()).map(flat);
+  ok(items.length === 4 && items[1] === 'テストサブスク（固定費）をオフにする' && items[2] === '仮の固定費「テスト習い事」毎月 8,000円 を足す' && items[3] === '仮の収入「テスト副業」毎月 30,000円 を足す', `変更が4件、重なっている：${items.join(' / ')}`);
+  ok((await wiText(p, '#wi-changes .card-title')) === '試している変更（4件）', '見出し：試している変更（4件）');
+  // 同じ項目の金額を、もう一度変える → 置き換わる（件数は増えない）
+  await wiAdd(p, '[data-action="b-wi-amount"]', async () => {
+    await p.selectOption('#wa-item', 'fixed:fix-1');
+    await p.fill('#wa-amount', '50000');
+  });
+  ok((await p.locator('.wi-change').count()) === 4 && (await wiText(p, '#wi-period')) === '+43,500円', `家賃をもう一度（5万円）：件数は4件のまま、この期間 ${await wiText(p, '#wi-period')}`);
+  // 1件やめる（×）。置き換えた「家賃」の変更は、いちばん下に移っている
+  const label = await p.locator('.wi-change .icon-btn').nth(2).getAttribute('aria-label');
+  ok(label === 'この変更をやめる：仮の収入「テスト副業」毎月 30,000円 を足す', `×ボタンの名前：${label}`);
+  await p.locator('.wi-change .icon-btn').nth(2).click();
+  ok((await p.locator('.wi-change').count()) === 3 && (await wiText(p, '#wi-period')) === '+13,500円', `1件やめる：3件・この期間 ${await wiText(p, '#wi-period')}`);
+  await shot('whatif-changes-393-light', p);
+  // 実データは変わらない
+  ok(canon(await stored(p)) === original, '実際のデータ（保存されている値）は、何も変わっていない');
+  // 別の小タブへ行って戻っても、試している変更は残る
+  await p.click('[data-action="b-sub"][data-key="month"]');
+  await p.waitForSelector('#today-card');
+  ok((await heroText(p)) === 142000, '「今月」の自由に使える額は、元のまま（142,000円）');
+  await p.click('[data-action="b-sub"][data-key="whatif"]');
+  ok((await p.locator('.wi-change').count()) === 3, '小タブを行き来しても、試している変更は残る');
+  // すべてやめる
+  await p.click('[data-action="b-wi-clear"]');
+  await p.waitForFunction(() => document.getElementById('modal').open);
+  await answer(true, p);
+  ok((await p.locator('.wi-change').count()) === 0 && (await p.locator('#wi-period').count()) === 0, 'すべてやめると、結果も消える');
+  ok(canon(await stored(p)) === original, '実際のデータは、最後まで変わらない');
+  await c.context.close();
+}
+
+step('もしも：期間（月）の移動、ボーナスなど。この期間は0円でも、1年あたりには入る');
+{
+  const c = await newPage();
+  const p = c.page;
+  await wiOpenWith(p, whatifData());
+  await wiAdd(p, '[data-action="b-wi-amount"]', async () => {
+    await p.selectOption('#wa-item', 'income:inc-2');
+    await p.fill('#wa-amount', '70万');
+  });
+  // 11月はボーナスなし。1年（11月〜翌10月）には、12月10日と6月10日の2回 → 各 +100,000円
+  ok((await wiText(p, '#wi-period')) === '0円' && (await wiText(p, '#wi-year')) === '+200,000円', `ボーナス 60万→70万：11月は ${await wiText(p, '#wi-period')}・1年は ${await wiText(p, '#wi-year')}`);
+  ok((await p.locator('#wi-period svg').count()) === 1 && (await wiText(p, '#wi-result')).includes('変わりません'), '0円のときも、アイコンと「変わりません」');
+  await p.click('[data-action="b-next"]');
+  ok((await wiText(p, '.pnav-range')) === '12月1日〜12月31日', '次の期間（12月）へ');
+  ok((await wiText(p, '#wi-period')) === '+100,000円' && (await wiText(p, '#wi-year')) === '+200,000円', `12月：この期間 ${await wiText(p, '#wi-period')}・1年 ${await wiText(p, '#wi-year')}`);
+  ok((await wiText(p, '.wi-ba')).includes('620,000円 → 720,000円'), `12月の自由に使える額：${await wiText(p, '.wi-ba')}（収入 85万−固定費 22.5万−上乗せ 5,000円）`);
+  await shot('whatif-bonus-december-393', p, false);
+  await p.click('[data-action="b-now"]');
+  ok((await wiText(p, '.pnav-range')) === '11月1日〜11月30日', '「今の期間に戻る」で11月へ');
+  await c.context.close();
+}
+
+step('もしも：マイナスになるときは、赤＋アイコン＋「◯円のマイナス」');
+{
+  const c = await newPage();
+  const p = c.page;
+  await wiOpenWith(p, whatifData());
+  await wiAdd(p, '[data-action="b-wi-add"]', async () => {
+    await p.fill('#wd-name', 'テスト大きな固定費');
+    await p.fill('#wd-amount', '500000');
+  });
+  ok((await wiText(p, '#wi-period')) === '−500,000円' && (await p.locator('#wi-period.is-down svg').count()) === 1, `仮の固定費 50万円：この期間 ${await wiText(p, '#wi-period')}（下向きの矢印）`);
+  ok((await wiText(p, '#wi-result')).includes('減ります'), '言葉でも「減ります」');
+  ok((await wiText(p, '#wi-after')) === '−358,000円', `変更後：${await wiText(p, '#wi-after')}（142,000 − 500,000）`);
+  const warn = await wiText(p, '#wi-result .warn');
+  ok((await p.locator('#wi-result .warn svg').count()) === 1 && warn.includes('358,000円 のマイナスになります'), `警告（赤＋アイコン）：${warn}`);
+  await shot('whatif-negative-360', p, false);
+  await c.context.close();
+}
+
+step('もしも：返済への上乗せを変える（自由に使える額と、完済時期・利息の変化）');
+{
+  // 提案画面の結果と照らし合わせる（同じ計算元：上乗せ 5,000円 のとき、20,000円 のとき）
+  const c0 = await newPage();
+  const p0 = c0.page;
+  await openApp(p0, whatifData(), 'month', '#today-card');
+  await p0.click('[data-tab="plan"]');
+  await p0.waitForSelector('.reco .stat');
+  const planStat = async () => ({ months: flat(await p0.locator('.reco .stat').nth(0).locator('.stat-value').innerText()), interest: flat(await p0.locator('.reco .stat').nth(1).locator('.stat-value').innerText()), when: flat(await p0.locator('.reco .stat').nth(0).locator('.stat-sub').innerText()) });
+  const before = await planStat();
+  await p0.fill('#plan-extra', '20000');
+  await p0.waitForTimeout(150);
+  const after = await planStat();
+  await c0.context.close();
+  ok(before.months !== after.months && before.interest !== after.interest, `提案画面：上乗せ 5,000円 → 完済 ${before.months}・利息 ${before.interest}／20,000円 → 完済 ${after.months}・利息 ${after.interest}`);
+
+  const c = await newPage();
+  const p = c.page;
+  await wiOpenWith(p, whatifData());
+  const original = canon(await stored(p));
+  await wiAdd(p, '[data-action="b-wi-extra"]', async () => {
+    ok((await wiText(p, '#we-preview')).includes('今の上乗せ：5,000円'), `今の上乗せ：${await wiText(p, '#we-preview')}`);
+    await p.fill('#we-value', '2万');
+  });
+  ok((await wiText(p, '#wi-period')) === '−15,000円' && (await wiText(p, '#wi-year')) === '−180,000円', `上乗せ 5,000 → 20,000：この期間 ${await wiText(p, '#wi-period')}・1年 ${await wiText(p, '#wi-year')}`);
+  ok((await wiText(p, '.wi-ba')).includes('142,000円 → 127,000円'), `自由に使える額：${await wiText(p, '.wi-ba')}`);
+  const pm = await wiText(p, '#wi-plan-months');
+  const pi = await wiText(p, '#wi-plan-interest');
+  ok(pm.includes(`${before.months}`) && pm.includes(`→ ${after.months}`) && pm.includes('早まります'), `完済まで：${pm}（提案画面と同じ値）`);
+  ok(pi.startsWith(`${before.interest} → ${after.interest}`) && pi.includes('減ります'), `利息の合計：${pi}（提案画面と同じ値）`);
+  ok((await p.locator('#wi-plan-months svg').count()) === 1 && (await p.locator('#wi-plan-interest svg').count()) === 1, '完済時期・利息の変化にも、矢印のアイコンがつく');
+  ok((await wiText(p, '#wi-result')).includes('返済への上乗せを 5,000円 → 20,000円 にしたとき'), '何を変えたときの比べか、書いてある');
+  ok(flat(await text('.wi-change-text', p)) === '返済への上乗せ：5,000円 → 20,000円', `変更の一覧：${await wiText(p, '.wi-change-text')}`);
+  // 上乗せをもう一度変える → 置き換わる
+  await wiAdd(p, '[data-action="b-wi-extra"]', async () => {
+    await p.fill('#we-value', '0');
+  });
+  ok((await p.locator('.wi-change').count()) === 1 && (await wiText(p, '#wi-period')) === '+5,000円', `上乗せを 0円 に：1件のまま、この期間 ${await wiText(p, '#wi-period')}`);
+  ok((await wiText(p, '#wi-plan-months')).includes('遅くなります') && (await wiText(p, '#wi-plan-interest')).includes('増えます'), '上乗せを減らすと、完済は遅くなり、利息は増える（矢印は上向き）');
+  await shot('whatif-extra-393-light', p);
+  ok(canon(await stored(p)) === original, '実際のデータ（毎月の余剰金 5,000円など）は変わらない');
+  await c.context.close();
+}
+
+step('もしも：入力のエラー、Enter、項目が足りないとき、空のとき');
+{
+  const c = await newPage();
+  const p = c.page;
+  await wiOpenWith(p, whatifData());
+  await p.click('[data-action="b-wi-amount"]');
+  await sheetOpen(p);
+  await p.click('#b-wi-amount-form button[type="submit"]');
+  ok((await text('#wa-amount-err', p)) === '新しい金額を入れてください', `金額が空：${await text('#wa-amount-err', p)}`);
+  await p.fill('#wa-amount', 'あいう');
+  ok((await text('#wa-amount-err', p)).includes('数字で入れてください'), `数字でない：${await text('#wa-amount-err', p)}`);
+  await p.fill('#wa-amount', '99999999999');
+  ok((await text('#wa-amount-err', p)).includes('大きすぎます'), `大きすぎる：${await text('#wa-amount-err', p)}`);
+  await p.fill('#wa-amount', '0');
+  ok((await text('#wa-amount-err', p)) === '', '0円は入れられる（項目を0円にする）');
+  await p.press('#wa-amount', 'Enter');
+  ok((await p.evaluate(() => document.getElementById('sheet').open)) && (await p.locator('.wi-change').count()) === 0, 'Enter では、足されない（キーボードが閉じるだけ）');
+  ok((await p.getAttribute('#wa-amount', 'enterkeyhint')) === 'done', 'Enter のキーは「完了」');
+  await p.click('[data-action="close-sheet"]');
+  await sheetClosed(p);
+  await p.click('[data-action="b-wi-add"]');
+  await sheetOpen(p);
+  await p.click('#b-wi-add-form button[type="submit"]');
+  ok((await text('#wd-name-err', p)) === '名前を入れてください' && (await text('#wd-amount-err', p)).includes('入れてください'), `仮の項目：名前・金額が空：${await text('#wd-name-err', p)}／${await text('#wd-amount-err', p)}`);
+  await p.fill('#wd-name', 'x'.repeat(40));
+  ok((await p.inputValue('#wd-name')).length === 30, '名前は30字まで');
+  await p.click('[data-action="close-sheet"]');
+  await sheetClosed(p);
+  await c.context.close();
+}
+{
+  // 出費だけ記録している家計（収入・固定費・借入なし）：金額・オフ・上乗せは足せない。仮の項目だけ足せる
+  const c = await newPage();
+  const p = c.page;
+  const d = baseData({ since: '2026-11-01' });
+  d.budget.incomes = [];
+  d.budget.fixed = [];
+  d.budget.spends = [sp('s-1', '2026-11-10', 3000, 'food', 'テスト')];
+  await wiOpenWith(p, d);
+  ok((await p.locator('[data-action="b-wi-amount"]:disabled').count()) === 1 && (await p.locator('[data-action="b-wi-off"]:disabled').count()) === 1 && (await p.locator('[data-action="b-wi-extra"]:disabled').count()) === 1, '収入・固定費・借入がないときは、「金額を変える」「オフにする」「上乗せを変える」は押せない');
+  ok((await wiText(p, '#wi-changes')).includes('金額を変えられる収入・固定費が、まだ入っていません') && (await wiText(p, '#wi-changes')).includes('返済中の会社がないので'), '理由を書いてある');
+  await wiAdd(p, '[data-action="b-wi-add"]', async () => {
+    await p.click('[data-action="b-seg"][data-v="income"]');
+    await p.fill('#wd-name', 'テスト収入');
+    await p.fill('#wd-amount', '100000');
+  });
+  ok((await wiText(p, '#wi-period')) === '+100,000円' && (await wiText(p, '.wi-ba')).includes('0円 → 100,000円'), `仮の収入 10万円：${await wiText(p, '#wi-period')}・${await wiText(p, '.wi-ba')}`);
+  await c.context.close();
+}
+{
+  // 家計に何も入れていないとき
+  const c = await newPage();
+  await openApp(c.page, emptyBudgetData(), 'whatif', '.empty');
+  ok((await text('.empty h2', c.page)).includes('収入と固定費を入れましょう') && (await c.page.locator('#wi-result').count()) === 0, '家計に何も入れていない：入れる案内を出す');
+  await c.context.close();
+}
+{
+  // 項目を消したあと：その項目の変更は捨てられる。データを読み込み直したら、試している変更は消える
+  const c = await newPage();
+  const p = c.page;
+  await wiOpenWith(p, whatifData());
+  await wiAdd(p, '[data-action="b-wi-amount"]', async () => {
+    await p.selectOption('#wa-item', 'fixed:fix-4');
+    await p.fill('#wa-amount', '3000');
+  });
+  ok((await p.locator('.wi-change').count()) === 1, 'サブスクの金額を変えてみる');
+  await p.click('[data-action="b-sub"][data-key="items"]');
+  await p.click('[data-action="b-fixed-edit"][data-id="fix-4"]');
+  await sheetOpen(p);
+  await p.click('[data-action="b-fixed-delete"]');
+  await answer(true, p);
+  await p.click('[data-action="b-sub"][data-key="whatif"]');
+  ok((await p.locator('.wi-change').count()) === 0 && (await p.locator('#wi-period').count()) === 0, '実際にその項目を消したら、その項目の変更も（エラーにならず）消える');
+  await c.context.close();
+}
+
+step('もしも：見た目（幅393・360、ライト・ダーク）と、タップの大きさ・名前');
+async function reviewWhatif(label, opts, width) {
+  const c = await newPage({ viewport: { width, height: 800 }, ...opts });
+  const p = c.page;
+  await wiOpenWith(p, whatifData());
+  await wiAdd(p, '[data-action="b-wi-amount"]', async () => {
+    await p.selectOption('#wa-item', 'fixed:fix-1');
+    await p.fill('#wa-amount', '60000');
+  });
+  await wiAdd(p, '[data-action="b-wi-off"]', async () => {
+    await p.selectOption('#wo-item', 'fixed:fix-4');
+  });
+  await wiAdd(p, '[data-action="b-wi-extra"]', async () => {
+    await p.fill('#we-value', '20000');
+  });
+  ok(await noOverflow(p), `${label}：もしもは横にはみ出さない`);
+  const clipped = await p.evaluate(() => [...document.querySelectorAll('.wi-row, .wi-delta, .wi-ba, .wi-change, .wi-change-text, .wi-plan dd, .wi-plan dt, .wi-add .btn')].filter((e) => e.scrollWidth > e.clientWidth + 1).map((e) => e.className));
+  ok(clipped.length === 0, `${label}：数字や文字が切れていない${clipped.length ? `（${[...new Set(clipped)].join(',')}）` : ''}`);
+  await auditOk(p, `${label}：もしも`);
+  await p.evaluate(() => window.scrollTo(0, 0));
+  await shot(`whatif-${label}-top`, p, false);
+  await p.evaluate(() => document.querySelector('#wi-changes').scrollIntoView());
+  await shot(`whatif-${label}-changes`, p, false);
+  await p.click('[data-action="b-wi-add"]');
+  await sheetOpen(p);
+  await auditOk(p, `${label}：仮の項目のシート`);
+  await shot(`whatif-${label}-sheet`, p, false);
+  await c.context.close();
+}
+await reviewWhatif('w393-dark', { colorScheme: 'dark' }, 393);
+await reviewWhatif('w360-light', {}, 360);
+await reviewWhatif('w360-dark', { colorScheme: 'dark' }, 360);
+{
+  // 長い名前（30字・折り返せない英字）
+  const c = await newPage({ viewport: { width: 360, height: 800 } });
+  const p = c.page;
+  const d = whatifData();
+  d.budget.fixed[0].name = LONG_EN;
+  d.budget.incomes[0].name = LONG_JA;
+  await wiOpenWith(p, d);
+  await wiAdd(p, '[data-action="b-wi-amount"]', async () => {
+    await p.selectOption('#wa-item', 'fixed:fix-1');
+    await p.fill('#wa-amount', '60000');
+  });
+  await wiAdd(p, '[data-action="b-wi-add"]', async () => {
+    await p.fill('#wd-name', LONG_JA);
+    await p.fill('#wd-amount', '8000');
+  });
+  ok(await noOverflow(p), '長い名前：横にはみ出さない');
+  const clipped = await p.evaluate(() => [...document.querySelectorAll('.wi-change, .wi-change-text, .card')].filter((e) => e.scrollWidth > e.clientWidth + 1).map((e) => e.className));
+  ok(clipped.length === 0, `長い名前：文字が切れていない${clipped.length ? `（${clipped.join(',')}）` : ''}`);
+  await shot('whatif-long-names-360', p, false);
+  await c.context.close();
+}
+
+// >>> 追記する工程：なし（最後に、全体の通し確認） <<<
 
 console.log('\n---- コンソールのエラー・警告 ----');
 console.log(problems.length ? problems.join('\n') : '（なし）');

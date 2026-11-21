@@ -108,12 +108,12 @@ ok((await page.locator('.subtabs button').allInnerTexts()).join('/') === '今月
 ok((await text('.empty h2')).includes('収入と固定費を入れましょう'), '何も入れていないときの案内が出る');
 await shot('month-empty');
 
-step('履歴・もしもは「準備中」');
+step('履歴・もしも：何も入れていないときは、入れる案内');
 await subTab('history');
 ok((await text('.empty h2')).includes('収入と固定費を入れましょう'), '履歴：何も入れていないときは、入れる案内（履歴の中身は e2e-history.mjs）');
 await subTab('whatif');
-ok((await text('.empty h2')) === 'もしもは準備中です', 'もしも：準備中');
-await shot('whatif-soon');
+ok((await text('.empty h2')).includes('収入と固定費を入れましょう'), 'もしも：何も入れていないときは、入れる案内（もしもの中身は e2e-history.mjs）');
+await shot('whatif-empty');
 await subTab('month');
 
 step('案内から「収支」へ。給料日の設定');
